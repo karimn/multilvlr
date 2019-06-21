@@ -33,7 +33,8 @@ data {
     /* Rows are all the entities in the data and columns are the model levels they belong to (the cell value is the ID of the container model level entity). 
        Zero means not contained by model level OR is unknown (missing data leading to unkown subgroup). */
   int<lower = 0, upper = max(model_level_size)> model_level_hierarchy[sum(model_level_size), num_model_levels];
-  
+ 
+  // These do not include any covar subgroup levels 
   int<lower = 0, upper = num_model_levels> num_model_level_containers[num_model_levels];
   int<lower = 1, upper = num_model_levels> model_level_containers[sum(num_model_level_containers)];
   
@@ -48,6 +49,10 @@ data {
   
   int<lower = 0, upper = num_outcomes_analyzed> num_exogenous_outcomes_analyzed;
   int<lower = 0, upper = num_outcomes_analyzed> exogenous_outcomes_analyzed[num_exogenous_outcomes_analyzed]; // Annoying buffering to handle empty data 
+ 
+  // These include covar subgroup levels 
+  int<lower = 0, upper = num_model_levels> num_outcome_analyzed_levels[num_outcomes_analyzed];
+  int<lower = 1, upper = num_model_levels> outcome_analyzed_levels[sum(num_outcome_analyzed_levels)];
   
   // Composite Outcomes
   
@@ -114,11 +119,12 @@ data {
   real hyper_intercept_mean[num_outcomes_analyzed];
   real<lower = 0> hyper_intercept_scale[num_outcomes_analyzed];
   real<lower = 0> hyper_treatment_coef_scale[num_outcomes_analyzed];
+ 
+  int<lower = 0, upper = 1> outcome_analyzed_with_treatment_corr[sum(num_outcome_analyzed_levels)];
   
-  int<lower = 0, upper = 1> model_level_with_treatment_corr[sum(num_model_level_containers[outcome_analyzed_obs_level])];
+  real<lower = 0> outcome_analyzed_coef_scale[sum(num_outcome_analyzed_levels)];
   
-  real<lower = 0> model_level_coef_scale[sum(num_model_level_containers[outcome_analyzed_obs_level])];
-  real<lower = 0> model_level_coef_corr_lkj_df[sum(num_model_level_containers[outcome_analyzed_obs_level])]; 
+  real<lower = 0> outcome_analyzed_coef_corr_lkj_df[sum(num_outcome_analyzed_levels)]; 
   
   real<lower = 0> treatment_outcome_sigma_scale[num_outcomes_analyzed];
   
@@ -150,16 +156,16 @@ transformed data {
   int<lower = 0> 
     num_cholesky_corr_entries[num_outcomes_analyzed] = rep_array(0, num_outcomes_analyzed);
     
-  int<lower = 0, upper = num_model_levels>
-    num_outcome_analyzed_levels[num_outcomes_analyzed] = num_model_level_containers[outcome_analyzed_obs_level]; 
+  // int<lower = 0, upper = num_model_levels>
+  //   num_outcome_analyzed_levels[num_outcomes_analyzed] = num_model_level_containers[outcome_analyzed_obs_level]; 
    
-  int<lower = 1, upper = num_model_levels>
-    outcome_analyzed_levels[sum(num_outcome_analyzed_levels)] = array_extract_group_values(model_level_containers, num_model_level_containers, outcome_analyzed_obs_level);
+  // int<lower = 1, upper = num_model_levels>
+  //   outcome_analyzed_levels[sum(num_outcome_analyzed_levels)] = array_extract_group_values(model_level_containers, num_model_level_containers, outcome_analyzed_obs_level);
   
   int<lower = 0> 
-    num_model_level_with_treatment_corr = sum(model_level_with_treatment_corr); // 0;
+    num_outcome_analyzed_with_treatment_corr = sum(outcome_analyzed_with_treatment_corr); // 0;
   int<lower = 0, upper = num_model_levels * num_outcomes_analyzed> 
-    model_level_treatment_corr_index[sum(num_outcome_analyzed_levels)] = seq_by_index(sum(num_outcome_analyzed_levels), which(model_level_with_treatment_corr, { 1 }, 1)); 
+    model_level_treatment_corr_index[sum(num_outcome_analyzed_levels)] = seq_by_index(sum(num_outcome_analyzed_levels), which(outcome_analyzed_with_treatment_corr, { 1 }, 1)); 
 
   // Count of how many outcomes are analyzed for each level of observation
   int<lower = 0, upper = num_outcomes_analyzed> 
@@ -667,10 +673,10 @@ parameters {
   
   vector<lower = 0>[total_num_predictor_sd] model_level_coef_tau;
                                                                                        
-  // vector[sum(num_cholesky_corr_entries)] model_level_predictor_coef_L_corr_flat[num_model_level_with_treatment_corr]; 
+  // vector[sum(num_cholesky_corr_entries)] model_level_predictor_coef_L_corr_flat[num_outcome_analyzed_with_treatment_corr]; 
   // BUGBUG Doesn't handle outcomes with correlation matrices with varying dimensions; some rows and columns would be modeled but remain unused if
   // num_predictor_coef[.] < max(num_predictor_coef)
-  cholesky_factor_corr[max(num_predictor_coef)] model_level_predictor_coef_L_corr[num_model_level_with_treatment_corr]; 
+  cholesky_factor_corr[max(num_predictor_coef)] model_level_predictor_coef_L_corr[num_outcome_analyzed_with_treatment_corr]; 
   
   vector[sum(num_treatment_scales)] treatment_outcome_sigma;
   
@@ -872,7 +878,7 @@ transformed parameters {
               container_model_level_ids = model_level_hierarchy[curr_outcome_entities_pos:curr_outcome_entities_end, model_level_index][curr_candidate_entity_ids];
             }
             
-            if (model_level_with_treatment_corr[outcome_model_levels_pos + model_level_index_index - 1] && num_cholesky_corr_entries[curr_outcome_index] > 0) {
+            if (outcome_analyzed_with_treatment_corr[outcome_model_levels_pos + model_level_index_index - 1] && num_cholesky_corr_entries[curr_outcome_index] > 0) {
               matrix[curr_num_predictor_coef, curr_num_predictor_coef] curr_coef_corr = 
                 model_level_predictor_coef_L_corr[model_level_treatment_corr_index[outcome_model_levels_pos + model_level_index_index - 1],
                                                   1:curr_num_predictor_coef, 
@@ -1096,12 +1102,12 @@ model {
             int curr_model_level_size = model_level_size[model_level_index];
             int predictor_tau_end = predictor_tau_pos + curr_num_predictor_coef - 1; 
             
-            model_level_coef_tau[predictor_tau_pos:predictor_tau_end] ~ normal(0, model_level_coef_scale[outcome_model_levels_pos + model_level_index_index - 1]);
+            model_level_coef_tau[predictor_tau_pos:predictor_tau_end] ~ normal(0, outcome_analyzed_coef_scale[outcome_model_levels_pos + model_level_index_index - 1]);
             
-            if (model_level_with_treatment_corr[outcome_model_levels_pos + model_level_index_index - 1] && num_cholesky_corr_entries[curr_outcome_index] > 0) {
+            if (outcome_analyzed_with_treatment_corr[outcome_model_levels_pos + model_level_index_index - 1] && num_cholesky_corr_entries[curr_outcome_index] > 0) {
               model_level_predictor_coef_L_corr[model_level_treatment_corr_index[outcome_model_levels_pos + model_level_index_index - 1],
                                                 1:curr_num_predictor_coef,
-                                                1:curr_num_predictor_coef] ~ lkj_corr_cholesky(model_level_coef_corr_lkj_df[outcome_model_levels_pos + model_level_index_index - 1]);
+                                                1:curr_num_predictor_coef] ~ lkj_corr_cholesky(outcome_analyzed_coef_corr_lkj_df[outcome_model_levels_pos + model_level_index_index - 1]);
             } 
             
             predictor_tau_pos = predictor_tau_end + 1; 

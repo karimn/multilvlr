@@ -154,7 +154,7 @@ calculate_subgroup_map <- function(level_variables, .level_data, .level_id_name,
       nest(-subgroup_by, .key = "subgroups")
   }
   
-  if (nrow(contained_in) > 0) {
+  if (NROW(contained_in) > 0) {
     get_level_subgroup_members <- function(level_id_name, curr_level_data) {
       curr_level_data %>% 
         select(level_id_name, id) %>% 
@@ -1072,15 +1072,21 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
       pull(level_index) %>% 
       as.array(),
     
-    model_level_containers = model_levels_metadata %$% 
-      map(contained_in, pull, level_index) %>% 
+    num_model_level_containers = model_levels_metadata %>% 
+      select(level_index, covar_for_level, contained_in) %$% 
+      map(contained_in, left_join, by = "level_index", .) %>%
+      map(filter, is.na(covar_for_level)) %>% 
+      map_int(NROW) %>% 
+      as.array(),
+    
+    model_level_containers = model_levels_metadata %>% 
+      select(level_index, covar_for_level, contained_in) %$% 
+      map(contained_in, left_join, by = "level_index", .) %>%
+      map(filter, is.na(covar_for_level)) %>% 
+      map(pull, level_index) %>% 
       unlist() %>% 
       as.array(),
-    
-    num_model_level_containers = model_levels_metadata %$% 
-      map_int(contained_in, NROW) %>% 
-      as.array(),
-    
+      
     outcome_analyzed_subgroup_analysis_id = outcome_model_metadata %>% 
       filter(fct_match(variable_type, str_c("modeled", c("exogenous", "endogenous"), sep = " "))) %>% 
       arrange(outcome_type_id) %>% 
@@ -1088,7 +1094,26 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
       coalesce(0L) %>% 
       as.array(),
     
-    model_level_with_treatment_corr = outcome_model_metadata %>% {
+    num_outcome_analyzed_levels = outcome_model_metadata %>% {
+      if (sum(num_model_level_containers) > 0) {
+        filter(., !str_detect(variable_type, "unmodeled"),
+               map_int(contained_in, nrow) > 0) %$%
+          map_int(contained_in, NROW) %>% 
+          as.array()
+      } else array(dim = 0)
+    },
+    
+    outcome_analyzed_levels = outcome_model_metadata %>% {
+      if (sum(num_model_level_containers) > 0) {
+        filter(., !str_detect(variable_type, "unmodeled"),
+               map_int(contained_in, nrow) > 0) %$%
+          map(contained_in, pull, level_index) %>% 
+          unlist() %>% 
+          as.array()
+      } else array(dim = 0)
+    },
+    
+    outcome_analyzed_with_treatment_corr = outcome_model_metadata %>% {
       if (sum(num_model_level_containers) > 0) {
         filter(., !str_detect(variable_type, "unmodeled"),
                map_int(contained_in, nrow) >  0) %>%
@@ -1250,7 +1275,7 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
     
     # Priors
     
-    model_level_coef_scale = outcome_model_metadata %>% 
+    outcome_analyzed_coef_scale = outcome_model_metadata %>% 
       filter(!str_detect(variable_type, "unmodeled"),
              !map_lgl(contained_in, is_empty)) %>% 
       unnest(contained_in) %>% {
@@ -1261,7 +1286,7 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
         }
       }, 
     
-    model_level_coef_corr_lkj_df = outcome_model_metadata %>% 
+    outcome_analyzed_coef_corr_lkj_df = outcome_model_metadata %>% 
       filter(!str_detect(variable_type, "unmodeled"),
              !map_lgl(contained_in, is_empty)) %>% 
       unnest(contained_in) %>% {
