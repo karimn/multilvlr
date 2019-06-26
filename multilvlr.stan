@@ -74,15 +74,26 @@ data {
   // Treatments and ATEs
   
   int<lower = 1> num_treatments[num_outcomes_analyzed]; // # of treatment cells
+  // int<lower = 1> num_treatment_components[num_outcomes_analyzed]; // # of actual treatment variables, the number of cross treatment assignments
+  // int<lower = 0> treatment_component_ids[sum(num_treatments), max(num_treatment_components)]; 
+  
+  matrix<lower = 0, upper = 1>[sum(num_treatments), max(num_treatments)] treatment_map_design_matrix;
   
     /* ID of treatment assigned to observations, 0 if observation is not measured for outcome */
   int<lower = 0, upper = max(num_treatments)> obs_treatment[sum(model_level_size[outcome_analyzed_obs_level])]; 
   
   int<lower = 0> num_ate_pairs[num_outcomes_analyzed];
-  int<lower = 1> ate_pairs[sum(num_ate_pairs), 2];
+  
+  int<lower = 0, upper = max(model_level_size)> ate_pairs_treatment_id_size[sum(num_ate_pairs)];
+  int<lower = 1> ate_pairs_treatment_id[sum(ate_pairs_treatment_id_size), 2];
+  
+  // int<lower = 1> ate_pairs[sum(num_ate_pairs), 2];
   
   int<lower = 0> num_composite_outcome_ate_pairs[num_composite_outcomes];
-  int<lower = 1> composite_outcome_ate_pairs[sum(num_composite_outcome_ate_pairs), 2];
+  int<lower = 1, upper = max(model_level_size)> composite_outcome_ate_pairs_treatment_id_size[sum(num_composite_outcome_ate_pairs)];
+  int<lower = 1> composite_outcome_ate_pairs_treatment_id[sum(composite_outcome_ate_pairs_treatment_id_size), 2];
+  
+  // int<lower = 1> composite_outcome_ate_pairs[sum(num_composite_outcome_ate_pairs), 2];
   
   // Subgroups
   
@@ -183,10 +194,10 @@ transformed data {
   int<lower = 0> analyzed_outcome_obs_effects_pos[num_outcomes_analyzed] = 
     append_array({ 1 }, model_level_size[outcome_analyzed_obs_level[1:(num_outcomes_analyzed - 1)]]); 
   
-  matrix<lower = 0, upper = 1>[max(num_treatments), max(num_predictor_coef)] 
-    treatment_map_design_matrix = 
-      diag_matrix(append_row(0, rep_vector(1, max(num_treatments) - 1))) + 
-      append_col(rep_vector(1, max(num_treatments)), rep_matrix(0, max(num_treatments), max(num_predictor_coef) - 1)); 
+  // matrix<lower = 0, upper = 1>[max(num_treatments), max(num_predictor_coef)] 
+  //   treatment_map_design_matrix = 
+  //     diag_matrix(append_row(0, rep_vector(1, max(num_treatments) - 1))) + 
+  //     append_col(rep_vector(1, max(num_treatments)), rep_matrix(0, max(num_treatments), max(num_predictor_coef) - 1)); 
       
   int<lower = 0, upper = num_outcomes_analyzed>
     num_discrete_outcomes_analyzed = num_equals(outcome_model_type, MODEL_TYPES_DISCRETE);
@@ -790,6 +801,7 @@ transformed parameters {
       int predictor_coef_corr_pos = 1;
       int outcome_entity_treatment_pos = 1; // This is to find the treatment parameters for the model entities for the current outcome
       int outcome_model_levels_pos = 1; // This is to find out which levels are used for which outcomes
+      int treatment_design_matrix_pos = 1;
     
       for (curr_outcome_index in 1:num_outcomes_analyzed) {
         int curr_num_model_levels = num_outcome_analyzed_levels[curr_outcome_index];
@@ -799,6 +811,7 @@ transformed parameters {
         int predictor_coef_corr_end = predictor_coef_corr_pos + num_cholesky_corr_entries[curr_outcome_index] - 1;
         int outcome_model_levels_end = outcome_model_levels_pos + curr_num_model_levels - 1;
         int curr_outcome_obs_level = outcome_analyzed_obs_level[curr_outcome_index];
+        int treatment_design_matrix_end = treatment_design_matrix_pos + curr_num_treatments - 1;
         
         int curr_outcome_entities_pos = model_level_pos[curr_outcome_obs_level];
         int curr_outcome_entities_end = curr_outcome_entities_pos + num_obs_entities[curr_outcome_index] - 1;
@@ -825,7 +838,8 @@ transformed parameters {
         int curr_outcome_obs_effects_end = curr_outcome_obs_effects_pos + num_obs_entities[curr_outcome_index] - 1;
         
         matrix[curr_num_predictor_coef, curr_num_predictor_coef] curr_treatment_map_design_matrix = 
-          treatment_map_design_matrix[1:curr_num_treatments, 1:curr_num_predictor_coef];
+          treatment_map_design_matrix[treatment_design_matrix_pos:treatment_design_matrix_end, 1:curr_num_predictor_coef];
+          // treatment_map_design_matrix[1:curr_num_treatments, 1:curr_num_predictor_coef];
           
         int curr_candidate_entity_ids[curr_num_obs_entities_candidates] = 
           model_level_candidate_entity_id[curr_outcome_candidate_entities_pos:curr_outcome_candidate_entities_end];
@@ -909,6 +923,7 @@ transformed parameters {
         predictor_coef_corr_pos = predictor_coef_corr_end + 1;
         outcome_model_levels_pos = outcome_model_levels_end + 1;
         outcome_entity_treatment_pos = outcome_entity_treatment_end + 1;
+        treatment_design_matrix_pos = treatment_design_matrix_end + 1;
       }
     }
    
@@ -1373,8 +1388,8 @@ generated quantities {
   
   vector[total_num_all_level_entity_predictor_treatments + total_num_predictor_treatments] iter_model_level_predictor_with_containers;
   
-  vector<lower = 0, upper = 1>[total_num_subgroup_treatment_ordered_levels] iter_level_ecdf;
-  vector<lower = -1, upper = 1>[total_num_subgroup_ate_pair_ordered_levels] iter_te_ecdf_diff;
+  // vector<lower = 0, upper = 1>[total_num_subgroup_treatment_ordered_levels] iter_level_ecdf;
+  // vector<lower = -1, upper = 1>[total_num_subgroup_ate_pair_ordered_levels] iter_te_ecdf_diff;
   
   // matrix[num_ate_pairs, num_iter_summary_quantiles] iter_quantile_diff[num_continuous_outcomes_analyzed + num_composite_outcomes];
   // matrix[num_ate_pairs, num_iter_summary_quantiles] iter_subgroup_quantile_diff[num_continuous_outcomes_analyzed + num_composite_outcomes, 
@@ -1388,8 +1403,8 @@ generated quantities {
   vector[total_num_predictor_coef] iter_model_level_treatment_residuals;
   vector[total_num_predictor_sd] iter_model_level_treatment_residual_variance;
 
-  vector[total_num_model_level_entity_ate_pairs] iter_model_level_te_residuals;
-  vector[total_num_model_level_ate_pairs] iter_model_level_te_residual_variance;
+  vector[total_num_model_level_entity_ate_pairs] iter_model_level_te_residuals = rep_vector(0, total_num_model_level_entity_ate_pairs);
+  vector[total_num_model_level_ate_pairs] iter_model_level_te_residual_variance = rep_vector(0, total_num_model_level_ate_pairs); 
   
   {
     int model_level_saturated_subgroup_ids[sum(model_level_size)] = rep_array(0, sum(model_level_size));
@@ -1587,6 +1602,7 @@ generated quantities {
       int component_outcome_pos = 1;
       int cutpoint_pos = 1;
       int outcome_model_levels_pos = 1; // This is to find out which levels are used for which outcomes
+      int ate_pairs_treatment_id_pos = 1;
       
       for (curr_outcome_index in 1:(num_outcomes_analyzed + num_composite_outcomes)) {
         int curr_num_treatments;
@@ -1604,7 +1620,7 @@ generated quantities {
         int curr_outcome_model_type = curr_outcome_index <= num_outcomes_analyzed ? outcome_model_type[curr_outcome_index] 
                                                                                   : composite_outcome_model_type[curr_outcome_index - num_outcomes_analyzed];
         
-        int curr_ate_pairs[curr_num_ate_pairs, 2]; 
+        int curr_ate_pairs_size[curr_num_ate_pairs]; 
         
         int component_outcome_end;
         int curr_continuous_outcome_index;
@@ -1614,6 +1630,8 @@ generated quantities {
         int entity_ate_end;
         int ecdf_treatment_end = ecdf_treatment_pos - 1;
         int ecdf_ate_end = ecdf_ate_pos - 1;
+        
+        int ate_pair_treatment_id_end;
         
         int curr_model_level_entity_pos;
         int curr_model_level_entity_end;
@@ -1641,12 +1659,12 @@ generated quantities {
           cutpoint_end = cutpoint_pos + curr_num_cutpoints - 1;
           entity_treatment_end = entity_treatment_pos + (curr_num_treatments * curr_num_obs_entities) - 1; 
           entity_treatment_candidate_end = entity_treatment_candidate_pos + (curr_num_treatments * num_model_level_subgroup_candidates[curr_obs_level]) - 1; 
-          entity_ate_end = entity_ate_pos + (curr_num_ate_pairs * curr_num_obs_entities) - 1; 
+          entity_ate_end = entity_ate_pos + (curr_num_ate_pairs * curr_num_obs_entities) - 1;
           ate_end = ate_pos + curr_num_ate_pairs - 1;
           
           outcome_treatment_end = outcome_treatment_pos + curr_num_treatments - 1;
           
-          curr_ate_pairs = ate_pairs[ate_pos:ate_end];
+          curr_ate_pairs_size = ate_pairs_treatment_id_size[ate_pos:ate_end];
           
           curr_model_level_entity_pos = model_level_pos[curr_obs_level];
           curr_model_level_entity_end = curr_model_level_entity_pos + model_level_size[curr_obs_level] - 1;
@@ -1718,7 +1736,30 @@ generated quantities {
             }
           
             obs_sim_outcomes[entity_treatment_pos:entity_treatment_end] = to_vector(curr_obs_sim_outcomes);
-            obs_te[entity_ate_pos:entity_ate_end] = to_vector(curr_obs_sim_outcomes[curr_ate_pairs[, 1]] - curr_obs_sim_outcomes[curr_ate_pairs[, 2]]);
+            
+            {
+              int temp_entity_ate_pos = entity_ate_pos;
+              int temp_ate_pairs_treatment_id_pos = ate_pairs_treatment_id_pos;
+            
+              for (ate_index in 1:curr_num_ate_pairs) {
+                int temp_entity_ate_end = temp_entity_ate_pos + curr_num_obs_entities - 1;
+                int temp_ate_pairs_treatment_id_end = temp_ate_pairs_treatment_id_pos + curr_ate_pairs_size[ate_index] - 1;
+                
+                if (curr_ate_pairs_size[ate_index] == 1) {
+                  obs_te[temp_entity_ate_pos:temp_entity_ate_end] = 
+                    to_vector(curr_obs_sim_outcomes[ate_pairs_treatment_id[temp_ate_pairs_treatment_id_pos, 1]] - curr_obs_sim_outcomes[ate_pairs_treatment_id[temp_ate_pairs_treatment_id_pos, 2]]);
+                } else {
+                  for (obs_index in 1:curr_num_obs_entities) {
+                    obs_te[temp_entity_ate_pos + obs_index - 1] = 
+                      curr_obs_sim_outcomes[ate_pairs_treatment_id[temp_ate_pairs_treatment_id_pos + obs_index - 1, 1], obs_index] 
+                      - curr_obs_sim_outcomes[ate_pairs_treatment_id[temp_ate_pairs_treatment_id_pos + obs_index - 1, 2], obs_index];
+                  }
+                }
+                
+                temp_entity_ate_pos = temp_entity_ate_end + 1;
+                temp_ate_pairs_treatment_id_pos = temp_ate_pairs_treatment_id_end + 1;
+              }
+            }
          }
           
           // Calculate mean and quantile treatment effects
@@ -1856,7 +1897,6 @@ generated quantities {
               int model_level_treatment_end = model_level_treatment_pos + curr_num_treatments - 1;
               int model_level_ate_end = model_level_ate_pos + curr_num_ate_pairs - 1;
               int model_level_entity_treatment_end = model_level_entity_treatment_pos + curr_model_level_size * curr_num_treatments - 1;
-              int model_level_entity_ate_end = model_level_entity_ate_pos + curr_model_level_size * curr_num_ate_pairs - 1; 
               
               matrix[curr_num_treatments, curr_model_level_size] curr_model_level_predictors =
                 to_matrix(model_level_predictor[model_level_entity_treatment_pos:model_level_entity_treatment_end], curr_num_treatments, curr_model_level_size)
@@ -1870,23 +1910,41 @@ generated quantities {
               iter_model_level_treatment_residual_variance[model_level_treatment_pos:model_level_treatment_end] =
                 square(curr_model_level_predictors - rep_matrix(model_level_treatment_residual_mean, curr_model_level_size))
                   * rep_vector(1.0 / (curr_model_level_size - 1), curr_model_level_size);
-              
-              if (ate_pos < ate_end) {
-                matrix[curr_num_ate_pairs, curr_model_level_size] model_level_te_residuals = 
-                  curr_model_level_predictors[curr_ate_pairs[, 1]] - curr_model_level_predictors[curr_ate_pairs[, 2]];
                   
-                vector[curr_num_ate_pairs] model_level_te_residual_mean = model_level_te_residuals * rep_vector(1.0 / curr_model_level_size, curr_model_level_size);
+              if (curr_num_ate_pairs > 0 ) {
+                int model_level_entity_ate_end = model_level_entity_ate_pos + curr_model_level_size * curr_num_ate_pairs - 1;
+                
+                int temp_entity_ate_pos = entity_ate_pos;
+                int temp_ate_pairs_treatment_id_pos = ate_pairs_treatment_id_pos;
+                
+                matrix[curr_num_ate_pairs, curr_model_level_size] model_level_te_residuals = rep_matrix(0, curr_num_ate_pairs, curr_model_level_size);
+                vector[curr_num_ate_pairs] model_level_te_residual_mean = rep_vector(0, curr_num_ate_pairs);
+                
+                for (ate_index in 1:curr_num_ate_pairs) {
+                  int temp_entity_ate_end = temp_entity_ate_pos + curr_num_obs_entities - 1;
+                  int temp_ate_pairs_treatment_id_end = temp_ate_pairs_treatment_id_pos + curr_ate_pairs_size[ate_index] - 1;
+                  
+                  if (curr_ate_pairs_size[ate_index] == 1) {
+                    model_level_te_residuals[ate_index] = 
+                      (curr_model_level_predictors[ate_pairs_treatment_id[temp_ate_pairs_treatment_id_pos, 1]] - curr_model_level_predictors[ate_pairs_treatment_id[temp_ate_pairs_treatment_id_pos, 2]]);
+                  } 
+                 
+                  temp_entity_ate_pos = temp_entity_ate_end + 1;
+                  temp_ate_pairs_treatment_id_pos = temp_ate_pairs_treatment_id_end + 1;
+                }
+                
+                model_level_te_residual_mean = model_level_te_residuals * rep_vector(1.0 / curr_model_level_size, curr_model_level_size);
                 
                 iter_model_level_te_residuals[model_level_entity_ate_pos:model_level_entity_ate_end] = to_vector(model_level_te_residuals);
                 
                 iter_model_level_te_residual_variance[model_level_ate_pos:model_level_ate_end] =
                   square(model_level_te_residuals - rep_matrix(model_level_te_residual_mean, curr_model_level_size))
                     * rep_vector(1.0 / (curr_model_level_size - 1), curr_model_level_size);
+                
+                model_level_entity_ate_pos = model_level_entity_ate_end + 1; 
               }
-    
+             
               model_level_treatment_pos = model_level_treatment_end + 1;
-              model_level_ate_pos = model_level_ate_end + 1;
-              model_level_entity_ate_pos = model_level_entity_ate_end + 1; 
               model_level_entity_treatment_pos = model_level_entity_treatment_end + 1;
             }
             
@@ -1910,6 +1968,8 @@ generated quantities {
           
           int composite_ate_end;
           
+          if (curr_outcome_index == num_outcomes_analyzed + 1) ate_pairs_treatment_id_pos = 1;
+          
           curr_num_treatments = num_composite_outcome_treatments[curr_outcome_index - num_outcomes_analyzed]; 
          
           composite_ate_end = composite_ate_pos + curr_num_ate_pairs - 1; 
@@ -1920,7 +1980,7 @@ generated quantities {
           entity_treatment_end = entity_treatment_pos + num_composite_outcome_treatments[curr_outcome_index - num_outcomes_analyzed] * curr_num_obs_entities - 1; 
           entity_ate_end = entity_ate_pos + num_composite_outcome_ate_pairs[curr_outcome_index - num_outcomes_analyzed] * curr_num_obs_entities - 1; 
           
-          curr_ate_pairs = composite_outcome_ate_pairs[composite_ate_pos:composite_ate_end];
+          curr_ate_pairs_size = composite_outcome_ate_pairs_treatment_id_size[composite_ate_pos:composite_ate_end];
           
           curr_continuous_outcome_index = curr_outcome_index - num_outcomes_analyzed + num_continuous_outcomes_analyzed;
   
@@ -1957,8 +2017,31 @@ generated quantities {
                                                                                rep_vector(1, entity_treatment_end - entity_treatment_pos + 1)); 
                                                                               
             curr_obs_sim_outcomes = to_matrix(obs_sim_outcomes[entity_treatment_pos:entity_treatment_end], curr_num_treatments, curr_num_obs_entities);
-                                                                               
-            obs_te[entity_ate_pos:entity_ate_end] = to_vector(curr_obs_sim_outcomes[curr_ate_pairs[, 1]] - curr_obs_sim_outcomes[curr_ate_pairs[, 2]]);
+            
+            {
+              int temp_entity_ate_pos = entity_ate_pos;
+              int temp_ate_pairs_treatment_id_pos = ate_pairs_treatment_id_pos;
+              
+              for (ate_index in 1:curr_num_ate_pairs) {
+                int temp_entity_ate_end = temp_entity_ate_pos + curr_num_obs_entities - 1;
+                int temp_ate_pairs_treatment_id_end = temp_ate_pairs_treatment_id_pos + curr_ate_pairs_size[ate_index] - 1;
+                
+                if (curr_ate_pairs_size[ate_index] == 1) {
+                  obs_te[temp_entity_ate_pos:temp_entity_ate_end] = 
+                    to_vector(curr_obs_sim_outcomes[composite_outcome_ate_pairs_treatment_id[temp_ate_pairs_treatment_id_pos, 1]] 
+                    - curr_obs_sim_outcomes[composite_outcome_ate_pairs_treatment_id[temp_ate_pairs_treatment_id_pos, 2]]);
+                } else {
+                  for (obs_index in 1:curr_num_obs_entities) {
+                    obs_te[temp_entity_ate_pos + obs_index - 1] =
+                      curr_obs_sim_outcomes[composite_outcome_ate_pairs_treatment_id[temp_ate_pairs_treatment_id_pos + obs_index - 1, 1], obs_index]
+                      - curr_obs_sim_outcomes[composite_outcome_ate_pairs_treatment_id[temp_ate_pairs_treatment_id_pos + obs_index - 1, 2], obs_index];
+                  }
+                }
+               
+                temp_entity_ate_pos = temp_entity_ate_end + 1;
+                temp_ate_pairs_treatment_id_pos = temp_ate_pairs_treatment_id_end + 1;
+              }
+            }
           } else {
             reject("Unexpected composite type: ", curr_composite_type);
           }
@@ -2019,10 +2102,10 @@ generated quantities {
                 iter_te_quantiles[subgroup_ate_pos:subgroup_ate_end] = rep_matrix(0, curr_num_ate_pairs, num_iter_summary_quantiles);
                 
                 if (curr_outcome_model_type == MODEL_TYPE_ORDERED_LOGIT) {
-                  iter_level_ecdf[ecdf_treatment_pos:ecdf_treatment_end] = rep_vector(0, curr_num_treatments * curr_num_ordered_outcome_levels);
+                  // iter_level_ecdf[ecdf_treatment_pos:ecdf_treatment_end] = rep_vector(0, curr_num_treatments * curr_num_ordered_outcome_levels);
                   
                   if (curr_num_ate_pairs > 0) {
-                    iter_te_ecdf_diff[ecdf_ate_pos:ecdf_ate_end] = rep_vector(0, curr_num_ate_pairs * curr_num_ordered_outcome_levels); 
+                    // iter_te_ecdf_diff[ecdf_ate_pos:ecdf_ate_end] = rep_vector(0, curr_num_ate_pairs * curr_num_ordered_outcome_levels); 
                   }
                 }
               } else {
@@ -2040,15 +2123,15 @@ generated quantities {
                   matrix[curr_num_ordered_outcome_levels, curr_num_treatments] curr_iter_level_ecdf = rep_matrix(0, curr_num_ordered_outcome_levels, curr_num_treatments);
                   
                   for (treatment_index in 1:curr_num_treatments) {
-                    curr_iter_level_ecdf[, treatment_index] = 
-                      to_vector(ecdf(cumulative_sum(rep_vector(1, curr_num_ordered_outcome_levels)), 
-                                         analysis_sorted_obs_sim_outcomes[treatment_index, subgroup_members_pos:subgroup_members_end]')) / model_level_size[curr_obs_level];
+                    // curr_iter_level_ecdf[, treatment_index] = 
+                    //   to_vector(ecdf(cumulative_sum(rep_vector(1, curr_num_ordered_outcome_levels)), 
+                    //                      analysis_sorted_obs_sim_outcomes[treatment_index, subgroup_members_pos:subgroup_members_end]')) / model_level_size[curr_obs_level];
                   }
                   
-                  iter_level_ecdf[ecdf_treatment_pos:ecdf_treatment_end] = to_vector(curr_iter_level_ecdf);
+                  // iter_level_ecdf[ecdf_treatment_pos:ecdf_treatment_end] = to_vector(curr_iter_level_ecdf);
                   
                   if (curr_num_ate_pairs > 0) {
-                    iter_te_ecdf_diff[ecdf_ate_pos:ecdf_ate_end] = to_vector(curr_iter_level_ecdf[, curr_ate_pairs[, 1]] - curr_iter_level_ecdf[, curr_ate_pairs[, 2]]);
+                    // iter_te_ecdf_diff[ecdf_ate_pos:ecdf_ate_end] = to_vector(curr_iter_level_ecdf[, curr_ate_pairs[, 1]] - curr_iter_level_ecdf[, curr_ate_pairs[, 2]]);
                   }
                 }
                   
@@ -2081,6 +2164,7 @@ generated quantities {
         cutpoint_pos = cutpoint_end + 1;
         entity_treatment_pos = entity_treatment_end + 1;
         entity_ate_pos = entity_ate_end + 1;
+        ate_pairs_treatment_id_pos += sum(curr_ate_pairs_size);
   
     //     if (curr_outcome_index <= num_outcomes_analyzed) {
     //       for (compare_subgroup_index in 1:num_compare_subgroup_pairs) {

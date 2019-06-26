@@ -15,25 +15,55 @@
 #'
 #' @examples
 identify_treatment_id <- function(ate_pairs, treatment_map) { 
-  left_right_cells_colnames <- str_subset(names(ate_pairs), "_(left|right)$")
-  ate_pairs %<>% mutate(ate_pair_id = seq_len(n()))
+  if (!is.data.frame(ate_pairs)) {
+    map(ate_pairs, identify_treatment_id, treatment_map) %>% 
+      bind_rows() %>% 
+      mutate(ate_pair_id = seq_len(n()))
+  } else {
+    left_right_cells_colnames <- str_subset(names(ate_pairs), "_(left|right)$")
+    
+    both_cells_colnames <- setdiff(names(ate_pairs), left_right_cells_colnames) %>% 
+      intersect(names(treatment_map))
+    
+    curr_left_right_cells_colnames <- left_right_cells_colnames %>% 
+      str_replace("_(left|right)$", "") %>% 
+      unique() %>% 
+      intersect(names(treatment_map))
+   
+    ate_pairs %>% 
+      nest_join(treatment_map, c(curr_left_right_cells_colnames %>% { if (!is_empty(.)) setNames(., paste0(., "_left")) }, both_cells_colnames), name = "left") %>% 
+      nest_join(treatment_map, c(curr_left_right_cells_colnames %>% { if (!is_empty(.)) setNames(., paste0(., "_right")) }, both_cells_colnames), name = "right") %>% 
+      mutate(ate_pair_id = seq_len(n()))
+  }
+}
+
+identify_obs_ate_pairs <- function(ate_pairs, obs_treatment, treatment_map, treatment_formula) {
+  get_best_treatment_match <- function(curr_ate_treatment, obs_treatment, treatment_map, treatment_vars) {
+    ambiguous_treatment_vars <- intersect(names(curr_ate_treatment), treatment_vars)
+    
+    num_obs <- nrow(obs_treatment)
+    
+    obs_treatment_match <- obs_treatment %>% 
+      left_join(treatment_map, by = "treatment_id") %>% 
+      select(ambiguous_treatment_vars) %>% 
+      left_join(curr_ate_treatment, by = ambiguous_treatment_vars) %>% 
+      pull(treatment_id)
+    
+    assertthat::are_equal(num_obs, nrow(obs_treatment_match))
+    
+    return(obs_treatment_match)
+  } 
   
-  list(treatment_map) %>% 
-    compact() %>% 
-    map(function(curr_treat_map) {
-      both_cells_colnames <- setdiff(names(ate_pairs), left_right_cells_colnames) %>% 
-        intersect(names(curr_treat_map))
-      
-      curr_left_right_cells_colnames <- left_right_cells_colnames %>% 
-        str_replace("_(left|right)$", "") %>% 
-        unique() %>% 
-        intersect(names(curr_treat_map))
-      
-      ate_pairs %>% 
-        inner_join(curr_treat_map, c(curr_left_right_cells_colnames %>% { if (!is_empty(.)) setNames(., paste0(., "_left")) }, both_cells_colnames)) %>% 
-        inner_join(curr_treat_map, c(curr_left_right_cells_colnames %>% { if (!is_empty(.)) setNames(., paste0(., "_right")) }, both_cells_colnames), suffix = c("_left", "_right")) 
-    }) %>% 
-    reduce(function(.left, .right) inner_join(.left, .right, by = intersect(names(.left), names(.right))))
+  treatment_vars <- all.vars(treatment_formula)
+  
+  if (is_null(ate_pairs)) {
+    return(NULL)
+  } else {
+    ate_pairs %>% 
+      mutate(obs_level_ate = map_int(left, nrow) > 1 | map_int(right, nrow) > 1,
+             obs_treatment_id_left = map_if(left, obs_level_ate, get_best_treatment_match, obs_treatment, treatment_map, treatment_vars, .else = ~ pull(., treatment_id)),
+             obs_treatment_id_right = map_if(right, obs_level_ate, get_best_treatment_match, obs_treatment, treatment_map, treatment_vars, .else = ~ pull(., treatment_id)))
+  }
 }
 
 #' Identify Observed Data Subgroup Membership 
@@ -803,31 +833,55 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
             identify_treatment_id(ate_pairs, treatment_map)
           } 
         }
-      ) %>% 
-        map_if(~ !is_null(.x), filter, treatment_id_left != treatment_id_right),
+      ) 
+        # map_if(~ !is_null(.x), filter, treatment_id_left != treatment_id_right),
       
-      ate_treatments = map_if(ate_pairs, ~ !is_null(.x), get_unique_treatments),
-      
-      ate_pairs = map2(
-        ate_pairs, ate_treatments,
-        function(ate_pairs, ate_treatments) {
-                              if (!is_null(ate_pairs)) {
-                                ate_pairs %>% 
-                                  left_join(ate_treatments, 
-                                            by = c("treatment_id_left" = "treatment_id")) %>% 
-                                  left_join(ate_treatments, 
-                                            by = c("treatment_id_right" = "treatment_id"),
-                                            suffix = c("_left", "_right"))
-                              } else {
-                                return(NULL)
-                              }
-                            })
+      # ate_treatments = map_if(ate_pairs, ~ !is_null(.x), get_unique_treatments),
+      # 
+      # ate_pairs = map2(
+      #   ate_pairs, ate_treatments,
+      #   function(ate_pairs, ate_treatments) {
+      #                         if (!is_null(ate_pairs)) {
+      #                           ate_pairs %>% 
+      #                             left_join(ate_treatments, 
+      #                                       by = c("treatment_id_left" = "treatment_id")) %>% 
+      #                             left_join(ate_treatments, 
+      #                                       by = c("treatment_id_right" = "treatment_id"),
+      #                                       suffix = c("_left", "_right"))
+      #                         } else {
+      #                           return(NULL)
+      #                         }
+      #                       })
     ) %>% 
-    update_outcome_components(treat_and_ate = TRUE) 
+    left_join(select(model_levels_metadata, level_name, level_data), c("obs_level" = "level_name")) %>% 
+    mutate(
+      obs_treatment = map2(
+        level_data, treatment_map,
+        function(level_data, treatment_map) {
+          if (is_null(treatment_map)) {
+            return(NULL)
+          } else if (nrow(treatment_map) == 1) {
+            return(tibble(treatment_id = rep.int(1L, nrow(level_data))))
+          } else {
+            level_data %>% 
+              left_join(treatment_map, by = intersect(names(.), names(treatment_map))) %>%
+              select(treatment_id)
+          }
+        }),
+      
+      ate_pairs = pmap(lst(ate_pairs, obs_treatment, treatment_map, treatment_formula), identify_obs_ate_pairs)
+    ) %>% 
+    update_outcome_components(treat_and_ate = TRUE) %>% 
+    select(-level_data) 
   
   num_treatments <- outcome_model_metadata %>% 
     filter(!str_detect(variable_type, "unmodeled")) %$% 
     map_int(treatment_map_design_matrix, NROW)
+  
+  num_treatment_components <- outcome_model_metadata %>% 
+    filter(!str_detect(variable_type, "unmodeled")) %$% 
+    map(treatment_formula, all.vars) %>% 
+    map(length)
   
   num_treatment_coef <- outcome_model_metadata %>% 
     filter(!str_detect(variable_type, "unmodeled")) %$% 
@@ -860,29 +914,33 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
     left_join(outcome_model_metadata, "outcome_type") %>% 
     arrange(variable_type, outcome_type, outcome_obs_id) 
  
-  outcome_model_metadata %<>%  
-    left_join(select(model_levels_metadata, level_name, level_data), c("obs_level" = "level_name")) %>% 
-    mutate(
-      obs_treatment = map2(
-        level_data, treatment_map,
-        function(level_data, treatment_map) {
-          if (is_null(treatment_map)) {
-            return(NULL)
-          } else if (nrow(treatment_map) == 1) {
-            return(rep.int(1L, nrow(level_data)))
-          } else {
-            level_data %>% 
-              left_join(treatment_map, by = intersect(names(.), names(treatment_map))) %>%
-              pull(treatment_id)
-          }
-        })
-    ) %>% 
-    select(-level_data)
+  # outcome_model_metadata %<>%  
+  #   left_join(select(model_levels_metadata, level_name, level_data), c("obs_level" = "level_name")) %>% 
+  #   mutate(
+  #     obs_treatment = map2(
+  #       level_data, treatment_map,
+  #       function(level_data, treatment_map) {
+  #         if (is_null(treatment_map)) {
+  #           return(NULL)
+  #         } else if (nrow(treatment_map) == 1) {
+  #           return(tibble(treatment_id = rep.int(1L, nrow(level_data))))
+  #         } else {
+  #           level_data %>% 
+  #             left_join(treatment_map, by = intersect(names(.), names(treatment_map))) %>%
+  #             select(treatment_id)
+  #         }
+  #       }),
+  #     
+  #     ate_pairs = pmap(lst(ate_pairs, obs_treatment, treatment_map, treatment_formula), identify_obs_ate_pairs)
+  #   ) %>% 
+  #   select(-level_data)
   
   obs_treatment <- outcome_model_metadata %>% 
-    filter(!str_detect(variable_type, "unmodeled")) %>% 
-    pull(obs_treatment) %>% 
-    unlist()
+    filter(!str_detect(variable_type, "unmodeled")) %$% 
+    bind_rows(obs_treatment) %>% 
+    pull(treatment_id)
+    # pull(obs_treatment) %>% 
+    # unlist()
   
   num_outcomes_analyzed <- outcome_model_metadata %>% 
     filter(!str_detect(variable_type, "unmodeled")) %>% 
@@ -1138,14 +1196,118 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
     exclude_outliers,
     
     num_treatments = as.array(num_treatments),
+    num_treatment_components = as.array(num_treatment_components),
     num_treatment_coef,
     num_predictor_coef = num_treatment_coef,
+    
+    treatment_map_design_matrix = outcome_model_metadata %>% 
+      filter(!str_detect(variable_type, "unmodeled")) %>% {
+        if (nrow(.) > 0) {
+          .$treatment_map_design_matrix %>% 
+            map(convert_to_buffered_matrix, max_col = max(map_int(., NCOL))) %>% 
+            map(unname) %>% 
+            do.call(rbind, .)
+        } else {
+          array(dim = 0)
+        }
+      },
+    
+    ate_pairs_treatment_id_size = outcome_model_metadata %>% 
+      filter(!str_detect(variable_type, "unmodeled"),
+             !map_lgl(ate_pairs, is_null)) %>% {
+        if (nrow(.) > 0) {
+          left_treatment_id_size <- .$ate_pairs %>% 
+            map_if(~ !is_null(.x), 
+                   ~ map_int(.$obs_treatment_id_left, length)) %>% 
+            unlist()
+          
+          right_treatment_id_size <- .$ate_pairs %>% 
+            map_if(~ !is_null(.x), 
+                   ~ map_int(.$obs_treatment_id_right, length)) %>% 
+            unlist()
+          
+          assertthat::are_equal(left_treatment_id_size, right_treatment_id_size)
+          
+          left_treatment_id_size
+        } else {
+          array(dim = 0)
+        }
+      },
+    
+    ate_pairs_treatment_id = outcome_model_metadata %>% 
+      filter(!str_detect(variable_type, "unmodeled")) %>% {
+        if (nrow(.) > 0) {
+          left_treatment_id <- .$ate_pairs %>% 
+            map_if(~ !is_null(.x), 
+                   ~ .$obs_treatment_id_left) %>% 
+            unlist()
+          
+          right_treatment_id <- .$ate_pairs %>% 
+            map_if(~ !is_null(.x), 
+                   ~ .$obs_treatment_id_right) %>% 
+            unlist()
+          
+         matrix(c(left_treatment_id, right_treatment_id), ncol = 2) 
+        } else {
+          array(dim = c(0, 2))
+        }
+      },
+    
+    composite_outcome_ate_pairs_treatment_id_size = if (num_composite_outcomes > 0) { 
+      composite_outcome_metadata %>% 
+        filter(!map_lgl(ate_pairs, is_null)) %>% {
+        left_treatment_id_size <- .$ate_pairs %>% 
+          map_if(~ !is_null(.x), 
+                 ~ map_int(.$obs_treatment_id_left, length)) %>% 
+          unlist()
+        
+        right_treatment_id_size <- .$ate_pairs %>% 
+          map_if(~ !is_null(.x), 
+                 ~ map_int(.$obs_treatment_id_right, length)) %>% 
+          unlist()
+        
+        assertthat::are_equal(left_treatment_id_size, right_treatment_id_size)
+        
+        left_treatment_id_size
+      }
+    } else array(0, dim = 0),
+    
+    composite_outcome_ate_pairs_treatment_id = if (num_composite_outcomes > 0) { 
+      left_treatment_id <- .$ate_pairs %>% 
+        map_if(~ !is_null(.x), 
+               ~ .$obs_treatment_id_left) %>% 
+        unlist()
+      
+      right_treatment_id <- .$ate_pairs %>% 
+        map_if(~ !is_null(.x), 
+               ~ .$obs_treatment_id_right) %>% 
+        unlist()
+      
+     matrix(c(left_treatment_id, right_treatment_id), ncol = 2) 
+    } else {
+      array(0, dim = c(0, 2))
+    },
+    
+    # composite_outcome_ate_pairs = if (num_composite_outcomes > 0) {
+    #   composite_outcome_metadata %>%
+    #     filter(!map_lgl(ate_pairs, is_null)) %>%
+    #     unnest(ate_pairs) %>%
+    #     select(rank_id_left, rank_id_right)
+    # } else array(0, dim = c(0, 2)),
     
     num_outcome_cutpoints = outcome_model_metadata %>% 
       filter(!str_detect(variable_type, "unmodeled")) %>% 
       pull(cutpoints) %>% 
       as.array(),
     
+    # treatment_component_ids = outcome_model_metadata %$% 
+    #   map2(treatment_map, treatment_formula, ~ select(.x, treatment_id, one_of(str_c(all.vars(.y), "_id")))) %>% 
+    #   map(arrange, treatment_id) %>% 
+    #   map(convert_to_buffered_matrix, max(map_int(., NCOL))) %>% 
+    #   map(unname) %>% 
+    #   do.call(rbind, .) %>% 
+    #   magrittr::extract(, -1),
+    # 
     obs_treatment,
   
     num_obs = observed_data %>% filter(measured) %>% count(variable_type, outcome_type) %>% pull(n) %>% as.array(),
@@ -1248,27 +1410,35 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
     
     num_ate_pairs = outcome_model_metadata %>% 
       filter(!str_detect(variable_type, "unmodeled")) %$% 
+             # !map_lgl(ate_pairs, is_null)) %$% 
       map_int(ate_pairs, NROW) %>% 
       as.array(),  
     
-    num_composite_outcome_ate_pairs = if (num_composite_outcomes > 0) { 
-      composite_outcome_metadata %$% 
-        map_int(ate_pairs, NROW) %>% 
+    num_composite_outcome_ate_pairs = if (num_composite_outcomes > 0) {
+      composite_outcome_metadata %$%
+        # filter(!map_lgl(ate_pairs, is_null)) %$% 
+        map_int(ate_pairs, NROW) %>%
         as.array()
     } else array(dim = c(0)),
     
-    ate_pairs = outcome_model_metadata %>% 
-      filter(!str_detect(variable_type, "unmodeled"),
-             !map_lgl(ate_pairs, is_null)) %>% 
-      unnest(ate_pairs) %>% 
-      select(rank_id_left, rank_id_right),
+    # num_composite_outcome_ate_pairs = if (num_composite_outcomes > 0) { 
+    #   composite_outcome_metadata %$% 
+    #     map_int(ate_pairs, NROW) %>% 
+    #     as.array()
+    # } else array(dim = c(0)),
     
-    composite_outcome_ate_pairs = if (num_composite_outcomes > 0) {
-      composite_outcome_metadata %>% 
-        filter(!map_lgl(ate_pairs, is_null)) %>% 
-        unnest(ate_pairs) %>% 
-        select(rank_id_left, rank_id_right)
-    } else array(0, dim = c(0, 2)),
+    # ate_pairs = outcome_model_metadata %>% 
+    #   filter(!str_detect(variable_type, "unmodeled"),
+    #          !map_lgl(ate_pairs, is_null)) %>% 
+    #   unnest(ate_pairs) %>% 
+    #   select(rank_id_left, rank_id_right),
+    
+    # composite_outcome_ate_pairs = if (num_composite_outcomes > 0) {
+    #   composite_outcome_metadata %>% 
+    #     filter(!map_lgl(ate_pairs, is_null)) %>% 
+    #     unnest(ate_pairs) %>% 
+    #     select(rank_id_left, rank_id_right)
+    # } else array(0, dim = c(0, 2)),
     
     iter_summary_quantiles = c(0.1, 0.25, 0.5, 0.75, 0.9) * 100,
     num_iter_summary_quantiles = length(iter_summary_quantiles),
@@ -1362,7 +1532,10 @@ get_linear_outcome_metadata <- function(stan_data, te = FALSE, model_level = FAL
     
     linear_outcome_metadata <- original_linear_outcome_metadata %>% 
       filter(map_int(ate_pairs, NROW) > 0) %>% 
-      unnest(ate_pairs, .drop = !(model_level | obs_level)) 
+      unnest(ate_pairs, .drop = !(model_level | obs_level)) %>% 
+      mutate(treatment_id_left = map_if(obs_treatment_id_left, !obs_level_ate, ~ ., .else = ~ NA) %>% unlist(),
+             treatment_id_right = map_if(obs_treatment_id_right, !obs_level_ate, ~ ., .else = ~ NA) %>% unlist())
+             
   } else {
     treat_ate_col <- "treatment_id"
     
@@ -1606,8 +1779,10 @@ calculate_posterior_histograms <- function(iter_level_mean, iter_te_mean, est_pe
       }
       
       model_type_iter_data %<>%
-        mutate(iter_data = map(iter_data, mutate, conditional_bin = cut(!!sym(iter_stat_conditional), breaks = breaks, right = FALSE, include.lowest = TRUE, labels = FALSE) %>%
-                                 magrittr::extract(breaks, .)))
+        mutate(iter_data = map_if(iter_data, 
+                                  ~ iter_stat_conditional %in% names(.),
+                                  mutate, conditional_bin = cut(!!sym(iter_stat_conditional), breaks = breaks, right = FALSE, include.lowest = TRUE, labels = FALSE) %>%
+                                    magrittr::extract(breaks, .)))
     }
     
     if (sum(stan_data$num_subgroup_analyses) == 0) {
@@ -1775,7 +1950,7 @@ postprocess_model_fit <- function(model_fit, stan_data, db_src = NULL, num_sampl
   # num_iter_te_quantiles <- nrow(iter_te_quantiles)
   
   iter_te_mean %<>% 
-    inner_join(select(iter_level_mean, 
+    left_join(select(iter_level_mean, 
                       outcome_type_id, level_index, treatment_id, subgroup_analysis_id_subgroup, subgroup_id, iter_data), 
               by = c("outcome_type_id", "level_index", "treatment_id_right" = "treatment_id", "subgroup_analysis_id_subgroup", "subgroup_id"),
               suffix = c("", "_baseline")) %>% 
@@ -1784,7 +1959,7 @@ postprocess_model_fit <- function(model_fit, stan_data, db_src = NULL, num_sampl
     select(-iter_data_baseline)
   
   iter_te_quantiles %<>% 
-    inner_join(select(iter_level_quantiles, 
+    left_join(select(iter_level_quantiles, 
                       outcome_type_id, level_index, treatment_id, subgroup_analysis_id_subgroup, subgroup_id, iter_data), 
               by = c("outcome_type_id", "level_index", "treatment_id_right" = "treatment_id", "subgroup_analysis_id_subgroup", "subgroup_id"),
               suffix = c("", "_baseline")) %>% 
@@ -1931,7 +2106,8 @@ postprocess_model_fit <- function(model_fit, stan_data, db_src = NULL, num_sampl
       iter_model_level_te_residual_variance <- 
         tidy_fit_stats(model_fit, db_src, "iter_model_level_te_residual_variance", split_into_pre = NULL, split_into_post = NULL, 
                        te = TRUE, model_level = TRUE, subgroup = FALSE,
-                       stan_data, sample_iter_ids, join_outcome_model_metadata = TRUE, include_composite_outcomes = FALSE) 
+                       stan_data, sample_iter_ids, join_outcome_model_metadata = TRUE, include_composite_outcomes = FALSE) %>% 
+        filter(!obs_level_ate)
       
       mean_model_level_te_residual_variance <- iter_model_level_te_residual_variance %>% 
         mutate(residual_variance_post_mean = map_dbl(iter_data, ~ mean(.$iter_stat))) %>% 
@@ -1950,6 +2126,7 @@ postprocess_model_fit <- function(model_fit, stan_data, db_src = NULL, num_sampl
         tidy_fit_stats(model_fit, db_src, "iter_model_level_te_residuals", split_into_pre = NULL, split_into_post = NULL, te = TRUE,
                        stan_data, sample_iter_ids, 
                        join_outcome_model_metadata = TRUE, subgroup = FALSE, obs_level = TRUE, include_composite_outcomes = FALSE) %>% 
+        filter(!obs_level_ate) %>% 
         mutate(level_entity_data = map(level_entity_data, mutate, residual_post_mean = map_dbl(iter_data, ~ mean(.$iter_stat))),
                residual_post_mean_variance = map_dbl(level_entity_data, ~ var(.$residual_post_mean))) %>% 
         select(-level_entity_data)
