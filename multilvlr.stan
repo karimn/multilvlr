@@ -1,4 +1,6 @@
+functions {
 #include /util.stan
+}
 
 data {
   // Constants
