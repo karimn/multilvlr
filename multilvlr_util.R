@@ -2389,6 +2389,55 @@ extract_model_fit_to_db <- function(chain_csv_files, db_src, stan_data, model_fi
   }
 }
 
+calculate_elpd_kfold <- function(log_lik_heldout_matrix) {
+  log_lik_heldout_matrix %>% 
+    do.call(cbind, .) %>% { 
+      num_samples <- nrow(.)
+      
+      matrixStats::colLogSumExps(.) %>% 
+        subtract(log(num_samples)) %>%
+        sum()
+    }
+}
+
+kfold <- function(x, ...) {
+  pointwise <- do.call(cbind, x) %>% { 
+    num_samples <- nrow(.)
+    
+    matrixStats::colLogSumExps(.) %>% 
+      subtract(log(num_samples)) 
+  }
+ 
+  kfold_results <- lst(
+    estimates = matrix(
+      c(sum(pointwise), sqrt(length(pointwise) * var(pointwise))),
+      nrow = 1) %>% 
+      set_colnames(c("Estimate", "SE")),
+    
+    pointwise = matrix(pointwise, nrow = 1)
+  ) 
+  
+  structure(kfold_results, class = c("kfold", "loo"))
+}
+
+kfold_compare <- function(..., x = list()) {
+  to_compare = if (is_empty(x)) list(...) else x
+  
+  best <- map(to_compare, "estimates") %>%
+    map_dbl(~ .[, "Estimate"]) %>%
+    which.max()
+  
+ to_compare[-best] %>% 
+   map_dfr(function(curr_to_compare, best_fit) {
+     tibble(
+       elpd_diff = curr_to_compare$estimates[, "Estimate"] - best_fit$estimates[, "Estimate"],
+       se_elpd_diff = sqrt(length(curr_to_compare$pointwise) * var(c(curr_to_compare$pointwise - best_fit$pointwise)))
+     )
+   }, best_fit = to_compare[[best]], .id = "model") %>% 
+   add_row(model = names(to_compare)[best], elpd_diff = 0, .before = 1) %>% 
+   arrange(desc(elpd_diff))
+}
+
 # Tables and Visualization -----------------------------------------------------------
 
 
