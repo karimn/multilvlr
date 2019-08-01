@@ -128,7 +128,7 @@ data {
   
   // Hyperparameters
   
-  real<lower = 0> hyper_param_df[num_outcomes_analyzed];
+  // real<lower = 0> hyper_param_df[num_outcomes_analyzed];
   real hyper_intercept_mean[num_outcomes_analyzed];
   real<lower = 0> hyper_intercept_scale[num_outcomes_analyzed];
   real<lower = 0> hyper_treatment_coef_scale[num_outcomes_analyzed];
@@ -1086,8 +1086,8 @@ model {
       int outcome_entity_candidates_pos = 1; 
       int outcome_entity_treatment_pos = 1; // This is to find the treatment parameters for the model entities for the current outcome
       int outcome_model_levels_pos = 1; // This is to find out which levels are used for which outcomes
-      
-      to_vector(model_level_coef_raw) ~ normal(0, 1);
+     
+      model_level_coef_raw ~ normal(0, 1);
       
       for (curr_outcome_index in 1:num_outcomes_analyzed) {
         int curr_num_model_levels = num_outcome_analyzed_levels[curr_outcome_index];
@@ -1101,12 +1101,13 @@ model {
         int treatment_outcome_sigma_end = treatment_outcome_sigma_pos + num_treatment_scales[curr_outcome_index] - 1; 
         int outcome_model_levels_end = outcome_model_levels_pos + curr_num_model_levels - 1; 
         
-        hyper_coef[predictor_coef_pos] ~ student_t(hyper_param_df[curr_outcome_index], 
-                                                   hyper_intercept_mean[curr_outcome_index] / (outcome_model_scaled[curr_outcome_index] ? obs_outcomes_sd[curr_outcome_index] : 1),
-                                                   hyper_intercept_scale[curr_outcome_index]);
+        // hyper_coef[predictor_coef_pos] ~ student_t(hyper_param_df[curr_outcome_index], 
+        hyper_coef[predictor_coef_pos] ~ normal(hyper_intercept_mean[curr_outcome_index] / (outcome_model_scaled[curr_outcome_index] ? obs_outcomes_sd[curr_outcome_index] : 1),
+                                                hyper_intercept_scale[curr_outcome_index]);
         
         if (curr_num_predictor_coef > 1) {
-          hyper_coef[(predictor_coef_pos + 1):predictor_coef_end] ~ student_t(hyper_param_df[curr_outcome_index], 0, hyper_treatment_coef_scale[curr_outcome_index]);
+          // hyper_coef[(predictor_coef_pos + 1):predictor_coef_end] ~ student_t(hyper_param_df[curr_outcome_index], 0, hyper_treatment_coef_scale[curr_outcome_index]);
+          hyper_coef[(predictor_coef_pos + 1):predictor_coef_end] ~ normal(0, hyper_treatment_coef_scale[curr_outcome_index]);
         }
         
         if (!outcome_model_scaled[curr_outcome_index] && with_scale_outcome_id[curr_outcome_index] != 0) {
