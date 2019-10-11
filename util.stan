@@ -327,7 +327,8 @@ function countingSort(array, k) is
     count[array[i]] ← count[array[i]] + 1
   for i = 2 to k do
     count[i] ← count[i] + count[i - 1]
-  for i = length(array) downto 1 do
+e for i = length(array) downto 1 do
+        
     output[count[array[i]]] ← array[i]
     count[array[i]] ← count[array[i]] - 1
   return output

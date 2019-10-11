@@ -1,6 +1,27 @@
 
 # Constants ---------------------------------------------------------------
 
+# General Utilities -------------------------------------------------------
+
+quantiles_pivot_wider <- function(quantiles_data) {
+  pivot_wider(quantiles_data, names_from = per, values_from = est, names_prefix = "per_")
+}
+
+quantilize_est <- function(iter, var, wide = FALSE, quant_probs = c(0.05, 0.1, 0.5, 0.9, 0.95)) {
+  quant_data <- iter %>% 
+    pull({{ var }}) %>% 
+    quantile(probs = quant_probs, names = FALSE) %>% 
+    enframe(name = NULL, value = "est") %>% 
+    mutate(per = quant_probs)
+  
+  if (wide) {
+    quant_data %<>% 
+      quantiles_pivot_wider()
+  } 
+  
+  return(quant_data)
+}
+
 # Pre-processing ----------------------------------------------------------
 
 #' Identify the Treatment IDs Of Named Treatments to Compare 
@@ -123,7 +144,8 @@ calculate_subgroup_members <- function(subgroup_data, curr_level_data) {
                                        ungroup()))
 
   observed_members %>%
-    nest(-subgroup_id, .key = "subgroup_members") %>%
+    # nest(-subgroup_id, .key = "subgroup_members") %>%
+    group_nest(subgroup_id, .key = "subgroup_members") %>%
     right_join(subgroup_data, "subgroup_id") %>%
     filter(observed) %>%
     bind_rows(missing_members) %>%
@@ -153,10 +175,13 @@ calculate_subgroup_map <- function(level_variables, .level_data, .level_id_name,
   # of missing subgroup_id
   
   if (nrow(exo_level_var) > 0) {
-    all_subgroup_map <- exo_level_var %>% 
+    exo_level_var_names <- exo_level_var %>% 
       pull(outcome_type) %>% 
-      as.character() %>% 
-      expand_(.level_data, .) %>% 
+      as.character()
+    
+    all_subgroup_map <-  
+      # expand_(.level_data, .) %>% 
+      expand(.level_data, !!!syms(exo_level_var_names)) %>% 
       magrittr::extract(map_dfc(., is.na) %>% rowSums() %>% not(), ) %>%
       mutate(observed = TRUE,
              subgroup_id = seq_len(nrow(.))) %>% 
@@ -165,7 +190,8 @@ calculate_subgroup_map <- function(level_variables, .level_data, .level_id_name,
     piecewise_subgroup_map <- map(exo_level_var$outcome_type,
                                   function(curr_outcome_type) {
                                     .level_data %>% 
-                                      expand_(as.character(curr_outcome_type)) %>% 
+                                      # expand_(as.character(curr_outcome_type)) %>% 
+                                      expand(!!!syms(as.character(curr_outcome_type))) %>% 
                                       magrittr::extract(map_dfc(., is.na) %>% rowSums() %>% not(), ) %>%
                                       mutate(observed = TRUE,
                                              subgroup_id = seq_len(nrow(.))) %>% 
@@ -181,14 +207,16 @@ calculate_subgroup_map <- function(level_variables, .level_data, .level_id_name,
       map_dfr(calculate_subgroup_members, 
               curr_level_data = .level_data, 
               .id = "subgroup_by") %>% 
-      nest(-subgroup_by, .key = "subgroups")
+      # nest(-subgroup_by, .key = "subgroups")
+      group_nest(subgroup_by, .key = "subgroups")
   }
   
   if (NROW(contained_in) > 0) {
     get_level_subgroup_members <- function(level_id_name, curr_level_data) {
       curr_level_data %>% 
         select(level_id_name, id) %>% 
-        nest(id, .key = "subgroup_members") %>% 
+        # nest(id, .key = "subgroup_members") %>% 
+        nest(subgroup_members = id) %>% 
         arrange(!!!syms(level_id_name)) %>% 
         mutate(subgroup_id = seq_len(nrow(.)), 
                observed = TRUE) 
@@ -209,10 +237,10 @@ calculate_subgroup_map <- function(level_variables, .level_data, .level_id_name,
     
     curr_level_containers_subgroup_map <- curr_levels_subgroup_map %>% 
       mutate(subgroups = map(subgroups, 
-                             ~ unnest(.x) %>% 
-                               mutate(subgroup_id = container_id) %>% 
-                               select(-container_id) %>% 
-                               group_nest(subgroup_id, observed, .key = "subgroup_members")))  
+                             ~ unnest(.x, cols = subgroup_members) %>%
+                               mutate(subgroup_id = container_id) %>%
+                               select(-container_id) %>%
+                               group_nest(subgroup_id, observed, .key = "subgroup_members")))
      
     curr_subgroup_map %<>%  
       bind_rows(covar = .,
@@ -227,7 +255,10 @@ calculate_subgroup_map <- function(level_variables, .level_data, .level_id_name,
   
   if (!is_null(curr_subgroup_map)) { 
     curr_subgroup_map %<>% 
-      mutate(subgroup_analysis_id = seq_len(nrow(.)))
+      mutate(subgroup_by = as_factor(subgroup_by) %>% fct_relevel("all", after = Inf)) %>% 
+      arrange(subgroup_for, subgroup_by) %>%  
+      mutate(subgroup_analysis_id = seq_len(nrow(.)),
+             subgroups = map(subgroups, mutate, subgroup_members = map(subgroup_members, as_tibble))) # Need this so that unnesting works (otherwise we get errors about the mismatched types: df & tibble)
   }
    
   return(curr_subgroup_map)
@@ -291,7 +322,7 @@ update_level_data_with_subgroup_id <- function(level_data, .covar_for_level, sub
         return(.)
       } %$%  
       subgroup_map[[1]] %>% 
-      unnest(subgroups) %>% 
+      unnest(cols = subgroups) %>% 
       filter(subgroup_by == "all", observed) %>% 
       rename(id = subgroup_id) %>% 
       arrange(id) 
@@ -372,13 +403,13 @@ convert_to_buffered_matrix <- function(level_mask, max_col) {
 #'
 #' @examples
 build_covar_subgroup_matrix <- function(accum, next_subgroups, subgroup_by) {
-  new_subgroup_id_name <- str_c(subgroup_by, "_subgroup_id")
+  new_subgroup_id_name <- str_c(as.character(subgroup_by), "_subgroup_id")
  
   next_subgroups %>%
     filter(observed) %>%
     rename(!!new_subgroup_id_name := subgroup_id) %>%
-    select(c(subgroup_by, new_subgroup_id_name)) %>% 
-    right_join(accum, subgroup_by)
+    select(c(as.character(subgroup_by), new_subgroup_id_name)) %>% 
+    right_join(accum, by = as.character(subgroup_by))
 }
 
 #' Process Composite Outcomes Metadata
@@ -473,7 +504,7 @@ set_level_subgroup_info <- function(level_metadata) {
       left_join(filter(., !is.na(covar_for_level)) %>% select(covar_for_level),
                 select(., level_name, subgroup_map),
                 by = c("covar_for_level" = "level_name")) %>%
-      unnest() 
+      unnest(cols = subgroup_map) 
   }
   
   if (nrow(covar_levels_subgroup_map) == 0) {
@@ -482,10 +513,11 @@ set_level_subgroup_info <- function(level_metadata) {
   
   level_metadata %>%
     left_join(covar_levels_subgroup_map %>% 
-                unnest(subgroups) %>%
+                unnest(cols = subgroups) %>%
                 filter(subgroup_by == "all", !map_lgl(subgroup_members, is_null)) %>% {
                   if (nrow(.) > 0) {
-                    unnest(., subgroup_members) %>%
+                    mutate(., subgroup_members = map(subgroup_members, select, id)) %>% 
+                    unnest(cols = subgroup_members) %>%
                       group_nest(covar_for_level, .key = "subgroup_level_data")
                   } else add_column(., subgroup_level_data = lst(NULL))
                 },
@@ -514,7 +546,8 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
                                            
                                            iter_summary_quantiles = c(0.1, 0.25, 0.5, 0.75, 0.9) * 100,
                                            
-                                           run_type = c("fit", "prior_predict")) {
+                                           run_type = c("fit", "prior_predict"),
+                                           cv_level = NA) {
   run_type <- match.arg(run_type) %>% factor(levels = c("fit", "prior_predict"))
   
   outcome_model_metadata %<>% 
@@ -594,21 +627,25 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
     prepared_analysis_data %<>% mutate(!!!map(outcome_calculators, ~ .x(.y), .)) 
   }
   
+  create_treatment_map <- function(form) {
+    prepared_analysis_data %>%
+      expand(!!!syms(all.vars(form))) %>% {
+        if (is_empty(.)) {
+          tibble(treatment_id = 1L)
+        } else {
+          mutate(., treatment_id = seq_len(nrow(.)))
+        }
+      } %>%
+      mutate_if(is.factor, list(id = ~ as.integer(.))) %>%
+      select(-one_of("id"))
+  }
+  
   outcome_model_metadata %<>% 
     mutate(
       treatment_map = map_if(
         treatment_formula,
         !fct_match(variable_type, str_c("unmodeled ", c("endogenous", "exogenous"))),
-        ~ prepared_analysis_data %>% 
-          expand_(all.vars(.x)) %>% {
-            if (is_empty(.)) {
-              tibble(treatment_id = 1L)
-            } else {
-              mutate(., treatment_id = seq_len(nrow(.))) 
-            }
-          } %>% 
-          mutate_if(is.factor, list(id = ~ as.integer(.))) %>% 
-          select(-one_of("id"))),
+        create_treatment_map),
       
       treatment_map_design_matrix = map2(
         treatment_formula, treatment_map,
@@ -689,7 +726,7 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
           if (nrow(exo_level_var) > 0) {
             subgroup_map %>% 
               filter(subgroup_by == "all", subgroup_for == "covar") %>%
-              unnest(subgroups) %>% 
+              unnest(cols = subgroups) %>% 
               filter(observed) %>% 
               arrange(subgroup_id) %>% 
               select(as.character(exo_level_var$outcome_type)) %>% 
@@ -710,7 +747,7 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
           if (nrow(exo_level_var) > 0) {
             subgroup_map %>% 
               filter(subgroup_by == "all", subgroup_for == "covar") %>%
-              unnest(subgroups) %>% 
+              unnest(cols = subgroups) %>% 
               filter(observed) %>% 
               arrange(subgroup_id) %>% 
               select(as.character(exo_level_var$outcome_type)) %>% 
@@ -774,7 +811,7 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
       left_join( # Get the subgroup_analysis_id corresponding to exogenous outcomes
         model_levels_metadata %>% 
           filter(map_int(subgroup_map, NROW) > 0) %>% 
-          unnest(subgroup_map) %>% 
+          unnest(cols = subgroup_map) %>% 
           filter(subgroup_for == "covar") %>% 
           select(level_index, subgroup_by, subgroup_analysis_id),
         by = c("level_index", "outcome_type" = "subgroup_by")) 
@@ -834,24 +871,6 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
           } 
         }
       ) 
-        # map_if(~ !is_null(.x), filter, treatment_id_left != treatment_id_right),
-      
-      # ate_treatments = map_if(ate_pairs, ~ !is_null(.x), get_unique_treatments),
-      # 
-      # ate_pairs = map2(
-      #   ate_pairs, ate_treatments,
-      #   function(ate_pairs, ate_treatments) {
-      #                         if (!is_null(ate_pairs)) {
-      #                           ate_pairs %>% 
-      #                             left_join(ate_treatments, 
-      #                                       by = c("treatment_id_left" = "treatment_id")) %>% 
-      #                             left_join(ate_treatments, 
-      #                                       by = c("treatment_id_right" = "treatment_id"),
-      #                                       suffix = c("_left", "_right"))
-      #                         } else {
-      #                           return(NULL)
-      #                         }
-      #                       })
     ) %>% 
     left_join(select(model_levels_metadata, level_name, level_data), c("obs_level" = "level_name")) %>% 
     mutate(
@@ -910,37 +929,14 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
             rename(outcome_obs_id = id) 
         })
     ) %>% 
-    unnest() %>% 
+    unnest(cols = level_data) %>% 
     left_join(outcome_model_metadata, "outcome_type") %>% 
     arrange(variable_type, outcome_type, outcome_obs_id) 
  
-  # outcome_model_metadata %<>%  
-  #   left_join(select(model_levels_metadata, level_name, level_data), c("obs_level" = "level_name")) %>% 
-  #   mutate(
-  #     obs_treatment = map2(
-  #       level_data, treatment_map,
-  #       function(level_data, treatment_map) {
-  #         if (is_null(treatment_map)) {
-  #           return(NULL)
-  #         } else if (nrow(treatment_map) == 1) {
-  #           return(tibble(treatment_id = rep.int(1L, nrow(level_data))))
-  #         } else {
-  #           level_data %>% 
-  #             left_join(treatment_map, by = intersect(names(.), names(treatment_map))) %>%
-  #             select(treatment_id)
-  #         }
-  #       }),
-  #     
-  #     ate_pairs = pmap(lst(ate_pairs, obs_treatment, treatment_map, treatment_formula), identify_obs_ate_pairs)
-  #   ) %>% 
-  #   select(-level_data)
-  
   obs_treatment <- outcome_model_metadata %>% 
     filter(!str_detect(variable_type, "unmodeled")) %$% 
     bind_rows(obs_treatment) %>% 
     pull(treatment_id)
-    # pull(obs_treatment) %>% 
-    # unlist()
   
   num_outcomes_analyzed <- outcome_model_metadata %>% 
     filter(!str_detect(variable_type, "unmodeled")) %>% 
@@ -992,6 +988,9 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
      
     all_ate,
     
+    calculate_cv_log_lik = !is.na(cv_level),
+    cv_level = if (calculate_cv_log_lik) model_levels_metadata %>% filter(fct_match(level_name, cv_level)) %>% pull(level_index) else 0,
+    
     num_outcomes_analyzed,
     num_composite_outcomes = NROW(composite_outcome_metadata),
     component_outcome_sizes = if (num_composite_outcomes > 0) array(map_int(composite_outcome_metadata$component_outcome_types, nrow)) else array(dim = 0),
@@ -1020,7 +1019,7 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
           map(., function(subgroup_map) {
             all_subgroups <- subgroup_map %>% 
               filter(subgroup_by == "all", subgroup_for == "covar") %>% 
-              unnest() %>% 
+              unnest(subgroups) %>% 
               filter(observed) %>% 
               rename(all_subgroup_id = subgroup_id)
             
@@ -1056,7 +1055,7 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
       as.array(),
   
     model_level_subgroup_outcomes = model_levels_metadata %>%  
-      unnest(level_variables) %>% 
+      unnest(cols = level_variables) %>% 
       filter(fct_match(variable_type, "modeled exogenous")) %>% 
       arrange(level_index, outcome_type_id) %>% 
       pull(outcome_type_id) %>% 
@@ -1072,9 +1071,9 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
                         
                         if (nrow(subgroup_members) > 0) {
                           subgroup_members %<>% 
-                            unnest(subgroups) %>% 
+                            unnest(cols = subgroups) %>% 
                             filter(map_int(subgroup_members, NROW) > 0) %>% 
-                            unnest(subgroup_members) 
+                            unnest(cols = subgroup_members) 
                           
                           if ("candidate_subgroups" %in% names(subgroup_members)) {
                             return(subgroup_members %>% 
@@ -1087,7 +1086,7 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
                       tibble(id = seq_len(lvl_size), 
                              num_candidates = rep(1L, lvl_size))
                     })) %>% 
-      unnest(level_num_candidates) %>% 
+      unnest(cols = level_num_candidates) %>% 
       arrange(level_index, id) %>% 
       pull(num_candidates),
   
@@ -1102,15 +1101,15 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
                         if (nrow(smap) > 0) {
                           return(
                             smap %>% 
-                              unnest(subgroups) %>%
+                              unnest(cols = subgroups) %>%
                               filter(map_int(subgroup_members, NROW) > 0) %>% 
-                              unnest(subgroup_members) %>% 
+                              unnest(cols = subgroup_members) %>% 
                               group_by(observed) %>% 
                               do({ 
                                 if (first(.$observed)) {
                                   select(., id, subgroup_id) 
                                 } else {
-                                  unnest(., candidate_subgroups, .sep = "_") %>% 
+                                  unnest(., cols = candidate_subgroups, name_sep = "_") %>% 
                                     transmute(id, subgroup_id = candidate_subgroups_subgroup_id) 
                                 }
                               }) %>% 
@@ -1121,7 +1120,7 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
                       
                       tibble(id = seq_len(lvl_size), subgroup_id = 0L)
                     })) %>% 
-        unnest(subgroup_candidates) %>% 
+        unnest(cols = subgroup_candidates) %>% 
         arrange(level_index, id, subgroup_id) %>% 
         pull(subgroup_id),
     
@@ -1175,7 +1174,8 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
       if (sum(num_model_level_containers) > 0) {
         filter(., !str_detect(variable_type, "unmodeled"),
                map_int(contained_in, nrow) >  0) %>%
-          unnest(contained_in) %>%
+          select(contained_in) %>% 
+          unnest(cols = contained_in) %>%
           pull(with_treatment_corr) %>% 
           as.integer() %>% 
           as.array()
@@ -1320,7 +1320,7 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
       select(level_name, subgroup_map) %>%
       filter(!map_lgl(subgroup_map, is_null)) %>% {
         if (nrow(.) > 0) {
-          unnest(.) %>% 
+          unnest(., cols = subgroup_map) %>% 
             filter(subgroup_by != "all") %$% 
             map_int(subgroups, ~ filter(.x, observed) %>% nrow()) %>% 
             array()
@@ -1333,13 +1333,13 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
       select(level_name, subgroup_map) %>%
       filter(!map_lgl(subgroup_map, is_null)) %>% {
         if (nrow(.) > 0) {
-          curr_subgroup_map <- unnest(., subgroup_map) %>%
+          curr_subgroup_map <- unnest(., cols = subgroup_map) %>%
             filter(subgroup_by != "all") 
           
           if (nrow(curr_subgroup_map) > 0) {
             return(
               curr_subgroup_map %>% 
-                unnest(subgroups) %>% 
+                unnest(cols = subgroups) %>% 
                 filter(observed) %>% # Exclude "missing" subgroup
                 arrange(level_name, subgroup_analysis_id, subgroup_id) %$% 
                 map_int(subgroup_members, NROW) %>% 
@@ -1354,15 +1354,16 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
       select(level_name, subgroup_map) %>%
       filter(!map_lgl(subgroup_map, is_null)) %>% {
         if (nrow(.) > 0) {
-          curr_subgroup_map <- unnest(., subgroup_map) %>%
+          curr_subgroup_map <- unnest(., cols = subgroup_map) %>%
             filter(subgroup_by != "all") 
           
           if (nrow(curr_subgroup_map) > 0) {
             return(
               curr_subgroup_map %>% 
-                unnest(subgroups) %>% 
+                unnest(cols = subgroups) %>% 
                 filter(map_lgl(subgroup_members, ~ NROW(.x) > 0), observed) %>% 
-                unnest(subgroup_members) %>% 
+                select(level_name, subgroup_analysis_id, subgroup_id, subgroup_members) %>% 
+                unnest(cols = subgroup_members) %>% 
                 arrange(level_name, subgroup_analysis_id, subgroup_id) %>% 
                 pull(id) %>% 
                 array())
@@ -1448,18 +1449,20 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
     outcome_analyzed_coef_scale = outcome_model_metadata %>% 
       filter(!str_detect(variable_type, "unmodeled"),
              !map_lgl(contained_in, is_empty)) %>% 
-      unnest(contained_in) %>% {
+      select(contained_in) %>% 
+      unnest(cols = contained_in) %>% {
         if (nrow(.) > 0) {
           pull(., model_level_coef_scale) %>% array() 
         } else {
           array(dim = 0)
         }
-      }, 
+      } , 
     
     outcome_analyzed_coef_corr_lkj_df = outcome_model_metadata %>% 
       filter(!str_detect(variable_type, "unmodeled"),
              !map_lgl(contained_in, is_empty)) %>% 
-      unnest(contained_in) %>% {
+      select(contained_in) %>% 
+      unnest(cols = contained_in) %>% {
         if (nrow(.) > 0) {
         pull(., model_level_coef_corr_lkj_df) %>% array()
         } else {
@@ -1532,7 +1535,7 @@ get_linear_outcome_metadata <- function(stan_data, te = FALSE, model_level = FAL
     
     linear_outcome_metadata <- original_linear_outcome_metadata %>% 
       filter(map_int(ate_pairs, NROW) > 0) %>% 
-      unnest(ate_pairs, .drop = !(model_level | obs_level)) %>% 
+      unnest(cols = ate_pairs, .drop = !(model_level | obs_level)) %>% 
       mutate(treatment_id_left = map_if(obs_treatment_id_left, !obs_level_ate, ~ ., .else = ~ NA) %>% unlist(),
              treatment_id_right = map_if(obs_treatment_id_right, !obs_level_ate, ~ ., .else = ~ NA) %>% unlist())
              
@@ -1540,7 +1543,9 @@ get_linear_outcome_metadata <- function(stan_data, te = FALSE, model_level = FAL
     treat_ate_col <- "treatment_id"
     
     linear_outcome_metadata <- original_linear_outcome_metadata %>% 
-      unnest(treatment_map, .drop = !(model_level | obs_level)) 
+      unnest(treatment_map) %>% { #, .drop = !(model_level | obs_level)) 
+        if (model_level | obs_level) . else select_if(., ~ !is.list(.))
+      }
   }
   
   linear_outcome_metadata %<>% 
@@ -1591,23 +1596,31 @@ get_linear_outcome_metadata <- function(stan_data, te = FALSE, model_level = FAL
                                  group_nest(subgroup_for, subgroup_by, subgroup_analysis_id, .key = "subgroups_data"))) %>% 
         unnest(subgroup_map)
       
+      linear_outcome_metadata %<>%
+        left_join(subgroup_metadata, c("obs_level" = "level_name", "level_index"), suffix = c("_outcome", "_subgroup")) %>% 
+        select(-outcome_type_index) 
+      
     } else {
       linear_outcome_metadata %<>% 
         mutate(subgroup_analysis_id = 0, 
                subgroup_analysis_id_subgroup = 0,
-               subgroups_data = lst(NULL))
+               subgroup_for = NA,
+               subgroup_by = NA,
+               subgroup_id = NA,
+               subgroups_data = lst(NULL),
+               container_id = NA)
                # subgroup_id = 0)
       
       
     }
     
     linear_outcome_metadata %<>%
-      left_join(subgroup_metadata, c("obs_level" = "level_name", "level_index"), suffix = c("_outcome", "_subgroup")) %>% 
+      # left_join(subgroup_metadata, c("obs_level" = "level_name", "level_index"), suffix = c("_outcome", "_subgroup")) %>% 
       arrange(!!!syms(c("outcome_type_id", "subgroup_analysis_id_subgroup", treat_ate_col))) %>% 
-      select(-outcome_type_index) %>% 
+      # select(-outcome_type_index) %>% 
       mutate(subgroups_data = map2(subgroups_data, 
                                    accumulate(map_int(subgroups_data, NROW), add, .init = 0) %>% magrittr::extract(-length(.)),
-                                   ~ mutate(.x, outcome_type_index = seq(.y + 1, .y + nrow(.x)))))
+                                   ~ if (!is_null(.x)) mutate(.x, outcome_type_index = seq(.y + 1, .y + nrow(.x))) else .x))
       # mutate(outcome_type_index = seq_len(n())) 
   }
   
@@ -1683,7 +1696,9 @@ tidy_fit_stats <- function(model_fit, db_src, varname, split_into_pre, split_int
   if (join_outcome_model_metadata || !is_null(outcomes)) {
     
     if (subgroup) {
-      linear_outcome_metadata %<>% unnest(subgroups_data)
+      linear_outcome_metadata %<>% 
+        mutate(subgroups_data = map_if(subgroups_data, is_null, ~ tibble())) %>% 
+        unnest(subgroups_data, keep_empty = TRUE)
     } 
     
     extracted_model_data <- nest_join(linear_outcome_metadata, extracted_model_data, by = "outcome_type_index", name = "iter_data") %>% 
@@ -1694,7 +1709,8 @@ tidy_fit_stats <- function(model_fit, db_src, varname, split_into_pre, split_int
     
     if (obs_level) {
       extracted_model_data %<>%  
-        nest(level_entity_id, !!sym(last_data_list), .key = "level_entity_data")
+        # nest(level_entity_id, !!sym(last_data_list), .key = "level_entity_data")
+        nest(level_entity_data = c(level_entity_id, last_data_list))
       
       last_data_list <- "level_entity_data"
     }
@@ -1794,7 +1810,8 @@ calculate_posterior_histograms <- function(iter_level_mean, iter_te_mean, est_pe
     get_bin_hist <- function(x, breaks = "Sturges") x %>% hist(plot = FALSE, breaks = breaks, right = FALSE, include.lowest = TRUE)
      
     model_type_iter_data %>% 
-      nest(subgroup_id, container_id, iter_data, .key = "transpose_subgroups_data") %>% 
+      # nest(subgroup_id, container_id, iter_data, .key = "transpose_subgroups_data") %>% 
+      nest(transpose_subgroups_data = c(subgroup_id, container_id, iter_data)) %>% 
       mutate(hist_bin_percentiles = 
                map(transpose_subgroups_data, 
                    function(transpose_data) {
@@ -1815,7 +1832,7 @@ calculate_posterior_histograms <- function(iter_level_mean, iter_te_mean, est_pe
                                                         as_tibble()) %>% 
                                 map(mutate, density = counts / sum(counts))) # The hist() density is not a true density (sums to 1)
                    }) %>%
-               map(~ unnest(.x) %>% 
+               map(~ unnest(.x, transpose_iter_data) %>% 
                      group_by_at(vars(-iter_id, -counts, -density)) %>% 
                      summarize(counts_est = lst(quantile_data(counts, est_percentiles)),
                                density_est = lst(quantile_data(density, est_percentiles))) %>% 
@@ -2192,15 +2209,15 @@ postprocess_model_fit <- function(model_fit, stan_data, db_src = NULL, num_sampl
   
   if (verbose) cat("done.\nSummarizing estimates...")
   
-  iter_summarize <- function(.data, quantiles = FALSE, iter_stat_varname = "iter_stat") {
+  iter_summarize <- function(.data, quantiles = FALSE, iter_stat_varname = iter_stat) {
     if (quantiles) {
       .data %<>% 
         mutate(iter_data = map(iter_data, group_by, quantile) %>% 
-                 map(group_modify, ~ tibble(per = est_percentiles, est = quantile(.[[iter_stat_varname]], probs = est_percentiles))) %>% 
+                 map(group_modify, ~ tibble(per = est_percentiles, est = quantile(pull(., {{ iter_stat_varname }}), probs = est_percentiles))) %>% 
                  map(ungroup)) 
     } else {
       .data %<>% 
-        mutate(iter_data = map(iter_data, ~ tibble(per = est_percentiles, est = quantile(.[[iter_stat_varname]], probs = est_percentiles)))) 
+        mutate(iter_data = map(iter_data, ~ tibble(per = est_percentiles, est = quantile(pull(., {{ iter_stat_varname }}), probs = est_percentiles)))) 
     } 
     
     .data %>% 
@@ -2220,8 +2237,8 @@ postprocess_model_fit <- function(model_fit, stan_data, db_src = NULL, num_sampl
   
   summ_level_mean <- iter_level_mean %>% iter_summarize() 
   summ_level_quantiles <- iter_level_quantiles %>% iter_summarize(quantiles = TRUE) 
-  summ_te_mean <- iter_te_mean %>% iter_summarize(iter_stat_varname = "iter_stat_diff") 
-  summ_te_quantiles <- iter_te_quantiles %>% iter_summarize(quantiles = TRUE, iter_stat_varname = "iter_stat_diff") 
+  summ_te_mean <- iter_te_mean %>% iter_summarize() 
+  summ_te_quantiles <- iter_te_quantiles %>% iter_summarize(quantiles = TRUE) 
   
   # summ_hyper_predictor_level <- iter_hyper_predictor_level %>% iter_summarize()
   # 
@@ -2512,4 +2529,5 @@ filter_subgroup_generator <- function(stan_data) {
     }
   }
 }
+
 
