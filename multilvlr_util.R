@@ -1272,18 +1272,20 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
       }
     } else array(0, dim = 0),
     
-    composite_outcome_ate_pairs_treatment_id = if (num_composite_outcomes > 0) { 
-      left_treatment_id <- .$ate_pairs %>% 
-        map_if(~ !is_null(.x), 
-               ~ .$obs_treatment_id_left) %>% 
-        unlist()
+    composite_outcome_ate_pairs_treatment_id = if (num_composite_outcomes > 0) {
+      composite_outcome_metadata %>% { 
+        left_treatment_id <- .$ate_pairs %>% 
+          map_if(~ !is_null(.x), 
+                 ~ .$obs_treatment_id_left) %>% 
+          unlist()
+        
+        right_treatment_id <- .$ate_pairs %>% 
+          map_if(~ !is_null(.x), 
+                 ~ .$obs_treatment_id_right) %>% 
+          unlist()
       
-      right_treatment_id <- .$ate_pairs %>% 
-        map_if(~ !is_null(.x), 
-               ~ .$obs_treatment_id_right) %>% 
-        unlist()
-      
-     matrix(c(left_treatment_id, right_treatment_id), ncol = 2) 
+        matrix(c(left_treatment_id, right_treatment_id), ncol = 2) 
+      }
     } else {
       array(0, dim = c(0, 2))
     },
