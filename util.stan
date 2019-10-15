@@ -426,13 +426,14 @@ int[] array_rows_dot_product(int[] left, int[] right) {
 int[] array_product(int[] left, int[] right) {
   int array_size = num_elements(left);
   int array_prod[array_size];
+  int right_array_size = num_elements(right);  
   
-  if (num_elements(right) != array_size) {
+  if (right_array_size != array_size && right_array_size != 1) {
     reject("Incompatible array sizes.");
   }
   
   for (array_index in 1:array_size) {
-    array_prod[array_index] = left[array_index] * right[array_index];
+    array_prod[array_index] = left[array_index] * right[right_array_size > 1 ? array_index : 1];
   }
   
   return(array_prod);
