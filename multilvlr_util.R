@@ -1900,7 +1900,7 @@ calculate_posterior_histograms <- function(iter_level_mean, iter_te_mean, est_pe
 #'
 #' @examples
 postprocess_model_fit <- function(model_fit, stan_data, db_src = NULL, num_samples = NULL, iter_model_level_sample_size = NULL, verbose = FALSE, 
-                                  hist_only = FALSE,
+                                  hist_only = FALSE, no_hist = FALSE,
                                   summarize_est = FALSE, 
                                   est_percentiles = c(0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99),
                                   treatment_variable = "treatment_rct",
@@ -2186,9 +2186,14 @@ postprocess_model_fit <- function(model_fit, stan_data, db_src = NULL, num_sampl
     error = function(err) if (verbose) cat("Not Applicable..."))
   }
   
-  if (verbose) cat("done.\nPosterior histograms...")
+ 
+  posterior_bin_hist <- if (!no_hist) { 
+    if (verbose) cat("done.\nPosterior histograms...")
+    
+    calculate_posterior_histograms(iter_level_mean, iter_te_mean, est_percentiles)
+  }
   
-  posterior_bin_hist <- calculate_posterior_histograms(iter_level_mean, iter_te_mean, est_percentiles)
+  cat("done.\n")
 
   if (hist_only) {
     return(posterior_bin_hist)
@@ -2209,7 +2214,7 @@ postprocess_model_fit <- function(model_fit, stan_data, db_src = NULL, num_sampl
   #   error = function(err) if (verbose) cat("Not Applicable...")
   # )
   
-  if (verbose) cat("done.\nSummarizing estimates...")
+  if (verbose) cat("Summarizing estimates...")
   
   iter_summarize <- function(.data, quantiles = FALSE, iter_stat_varname = iter_stat) {
     if (quantiles) {
