@@ -1480,6 +1480,7 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
       },
     
     run_type = as.numeric(run_type),
+    always_predict = FALSE,
     
     ...
   )

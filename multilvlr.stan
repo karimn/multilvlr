@@ -106,6 +106,8 @@ data {
   
   int<lower = 0, upper = 1> use_obs_effects;
   
+  int<lower = 0, upper = 1> always_predict;
+  
   // Model Levels
   
   int<lower = 1> num_model_levels; 
@@ -1927,7 +1929,7 @@ generated quantities {
               int obs_index = included_level_ids[included_ids_pos + obs_index_index - 1];
               
               for (treatment_index in 1:curr_num_treatments) {
-                if (run_type == RUN_TYPE_FIT && obs_treatment[obs_entity_pos + obs_index - 1] == treatment_index && measured_obs_mask[obs_entity_pos + obs_index - 1]) {
+                if (run_type == RUN_TYPE_FIT && !always_predict && obs_treatment[obs_entity_pos + obs_index - 1] == treatment_index && measured_obs_mask[obs_entity_pos + obs_index - 1]) {
 
                   curr_obs_sim_outcomes[treatment_index, obs_index_index] = obs_outcomes[obs_entity_pos + obs_index - 1];
 
