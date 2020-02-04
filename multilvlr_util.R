@@ -108,13 +108,13 @@ calculate_subgroup_members <- function(subgroup_data, curr_level_data) {
   
   get_candidate_subgroups <- function(subgroup_level_data) {
     not_na_col <- slice(subgroup_level_data, 1) %>%
-      select(shared_col_names) %>%
+      select(all_of(shared_col_names)) %>%
       select_if(~ !is.na(.x)) %>%
       names()
 
     if (!is_empty(not_na_col)) {
       with_candidates <- left_join(subgroup_level_data, 
-                                   select(subgroup_data, shared_col_names, subgroup_id), 
+                                   select(subgroup_data, all_of(shared_col_names), subgroup_id), 
                                    by = not_na_col, 
                                    suffix = c("", "_candidate")) 
     } else { # This is the only exogenous variable so all subgroups are candidates
@@ -122,7 +122,7 @@ calculate_subgroup_members <- function(subgroup_data, curr_level_data) {
         mutate(dummy = 1) %>% 
         left_join(filter(subgroup_data, observed) %>% 
                     mutate(dummy = 1) %>% 
-                    select(shared_col_names, subgroup_id, dummy), 
+                    select(all_of(shared_col_names), subgroup_id, dummy), 
                   by = "dummy",
                   suffix = c("", "_candidate")) %>% 
         select(-dummy)
@@ -214,7 +214,7 @@ calculate_subgroup_map <- function(level_variables, .level_data, .level_id_name,
   if (NROW(contained_in) > 0) {
     get_level_subgroup_members <- function(level_id_name, curr_level_data) {
       curr_level_data %>% 
-        select(level_id_name, id) %>% 
+        select(all_of(level_id_name), id) %>% 
         # nest(id, .key = "subgroup_members") %>% 
         nest(subgroup_members = id) %>% 
         arrange(!!!syms(level_id_name)) %>% 
@@ -408,7 +408,7 @@ build_covar_subgroup_matrix <- function(accum, next_subgroups, subgroup_by) {
   next_subgroups %>%
     filter(observed) %>%
     rename(!!new_subgroup_id_name := subgroup_id) %>%
-    select(c(as.character(subgroup_by), new_subgroup_id_name)) %>% 
+    select(all_of(c(as.character(subgroup_by), new_subgroup_id_name))) %>% 
     right_join(accum, by = as.character(subgroup_by))
 }
 
@@ -457,7 +457,7 @@ update_outcome_components <- function(outcome_metadata, treat_and_ate = TRUE) {
           }
           
           component_data %>% 
-            left_join(select(all_outcomes, component_col), c("component_outcome_type" = "outcome_type"), suffix = c("", "_component"))
+            left_join(select(all_outcomes, all_of(component_col)), c("component_outcome_type" = "outcome_type"), suffix = c("", "_component"))
         }, all_outcomes = .),
       
       obs_level = map2(component_outcome_types, obs_level, ~ if (is_null(.x) || is.na(.x)) .y else .x$obs_level[1]) %>% unlist())
@@ -729,8 +729,10 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
               unnest(cols = subgroups) %>% 
               filter(observed) %>% 
               arrange(subgroup_id) %>% 
-              select(as.character(exo_level_var$outcome_type)) %>% 
-              map(~ tibble(x = factor(.x)) %>% model_matrix(formula = ~ 0 + x)) %>% 
+              select(all_of(as.character(exo_level_var$outcome_type))) %>% 
+              map(~ {
+                tibble(x = factor(.x)) %>% model_matrix(formula = ~ 0 + x)
+              }) %>% 
               bind_cols()
           } else {
             return(NULL)
@@ -1071,11 +1073,13 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
                         
                         if (nrow(subgroup_members) > 0) {
                           subgroup_members %<>% 
-                            unnest(cols = subgroups) %>% 
+                            unnest(subgroups) %>% 
                             filter(map_int(subgroup_members, NROW) > 0) %>% 
-                            unnest(cols = subgroup_members) 
+                            mutate(subgroup_members = map(subgroup_members, select, id, one_of("candidate_subgroups"))) %>% 
+                            unnest(subgroup_members) %>% 
+                            select(id, observed, one_of("candidate_subgroups"))
                           
-                          if ("candidate_subgroups" %in% names(subgroup_members)) {
+                          if (has_name(subgroup_members, "candidate_subgroups")) {
                             return(subgroup_members %>% 
                                      transmute(id, num_candidates = if_else(!observed, map_int(candidate_subgroups, NROW), 1L)) %>% 
                                      arrange(id))
@@ -1103,14 +1107,17 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
                             smap %>% 
                               unnest(cols = subgroups) %>%
                               filter(map_int(subgroup_members, NROW) > 0) %>% 
+                              mutate(subgroup_members = map(subgroup_members, select, id, one_of("candidate_subgroups"))) %>% 
                               unnest(cols = subgroup_members) %>% 
+                              select(observed, id, subgroup_id, one_of("candidate_subgroups")) %>% 
                               group_by(observed) %>% 
                               do({ 
                                 if (first(.$observed)) {
                                   select(., id, subgroup_id) 
                                 } else {
-                                  unnest(., cols = candidate_subgroups, name_sep = "_") %>% 
-                                    transmute(id, subgroup_id = candidate_subgroups_subgroup_id) 
+                                  select(., -subgroup_id) %>% 
+                                    unnest(candidate_subgroups) %>% 
+                                    select(id, subgroup_id) 
                                 }
                               }) %>% 
                               ungroup() %>% 
@@ -1120,7 +1127,7 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
                       
                       tibble(id = seq_len(lvl_size), subgroup_id = 0L)
                     })) %>% 
-        unnest(cols = subgroup_candidates) %>% 
+        unnest(subgroup_candidates) %>% 
         arrange(level_index, id, subgroup_id) %>% 
         pull(subgroup_id),
     
