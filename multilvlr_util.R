@@ -516,7 +516,7 @@ set_level_subgroup_info <- function(level_metadata) {
                 unnest(cols = subgroups) %>%
                 filter(subgroup_by == "all", !map_lgl(subgroup_members, is_null)) %>% {
                   if (nrow(.) > 0) {
-                    mutate(., subgroup_members = map(subgroup_members, select, id)) %>% 
+                    mutate(., subgroup_members = map_if(subgroup_members, ~ !is_empty(.x), select, id)) %>% 
                     unnest(cols = subgroup_members) %>%
                       group_nest(covar_for_level, .key = "subgroup_level_data")
                   } else add_column(., subgroup_level_data = lst(NULL))
@@ -977,6 +977,13 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
   compare_subgroup_metadata <- tibble(left_subgroup_index = 1, right_subgroup_index = 2) %>% 
       mutate(compare_subgroup_pairs_index = seq_len(n()))
   
+  sort_hierarchy_col <- function(hierarchy_data) {
+    model_levels_metadata %$% 
+      str_c(level_id_name, if_else(is.na(covar_for_level), "", str_c("_", covar_for_level))) %>% { 
+        select(hierarchy_data, all_of(.))
+      }
+  }
+  
   stan_data_list <- lst(
     # Save meta data 
     
@@ -1011,7 +1018,8 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
            get_level_hierarchy_matrix, 
            all_levels_data = model_levels_metadata) %>% 
       mutate_all(as.integer) %>% 
-      mutate_all(list(~ coalesce(., 0L))),
+      mutate_all(coalesce, 0L) %>% 
+      sort_hierarchy_col(),
     
     model_level_covar_subgroup_hierarchy = model_levels_metadata %>% 
       mutate(subgroup_map = map_if(subgroup_map, ~ !is_null(.x), filter, subgroup_for == "covar")) %>% 
@@ -1160,11 +1168,13 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
     
     num_outcome_analyzed_levels = outcome_model_metadata %>% {
       if (sum(num_model_level_containers) > 0) {
-        filter(., !str_detect(variable_type, "unmodeled"),
+        filter(., !str_detect(variable_type, "unmodeled"), 
                map_int(contained_in, nrow) > 0) %$%
           map_int(contained_in, NROW) %>% 
           as.array()
-      } else array(dim = 0)
+      } else { 
+        filter(., !str_detect(variable_type, "unmodeled")) %>% nrow() %>% rep(0, .)
+      }
     },
     
     outcome_analyzed_levels = outcome_model_metadata %>% {
@@ -1459,7 +1469,7 @@ prepare_bayesian_analysis_data <- function(prepared_origin_data,
       filter(!str_detect(variable_type, "unmodeled"),
              !map_lgl(contained_in, is_empty)) %>% 
       select(contained_in) %>% 
-      unnest(cols = contained_in) %>% {
+      unnest(contained_in) %>% {
         if (nrow(.) > 0) {
           pull(., model_level_coef_scale) %>% array() 
         } else {

@@ -376,6 +376,29 @@ vector pmax(vector left, vector right) {
   return(pmin_max(left, right, 0));
 }
 
+int[] array_pmin_max(int[] left, int[] right, int use_min) {
+  int arr_size = num_elements(left);
+  int min_max_arr[arr_size];
+  
+  if (num_elements(right) != arr_size) {
+    reject("Incompatible array sizes.")
+  }
+  
+  for (min_max_index in 1:arr_size) {
+    min_max_arr[min_max_index] = use_min ? min(left[min_max_index], right[min_max_index]) : max(left[min_max_index], right[min_max_index]);
+  }
+  
+  return(min_max_arr);
+}
+
+int[] array_pmin(int[] left, int[] right) {
+  return(array_pmin_max(left, right, 1));
+}
+
+int[] array_pmax(int[] left, int[] right) {
+  return(array_pmin_max(left, right, 0));
+}
+
 int num_lower_tri_cells(int matrix_size, int diag) {
   int num_cells = 0;
   

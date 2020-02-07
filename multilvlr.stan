@@ -384,7 +384,7 @@ transformed data {
   
   int<lower = 1> num_outcome_analyzed_all_level_entities[num_outcomes_analyzed] = array_sum_group_values(model_level_size[outcome_analyzed_levels], num_outcome_analyzed_levels);
   
-  int<lower = 1> outcome_analyzed_predictor_size[num_outcomes_analyzed] = array_add(num_outcome_cutpoints, rep_array(1, num_outcomes_analyzed));
+  int<lower = 1> outcome_analyzed_predictor_size[num_outcomes_analyzed] = array_pmax(num_outcome_cutpoints, rep_array(1, num_outcomes_analyzed)); // array_add(num_outcome_cutpoints, rep_array(1, num_outcomes_analyzed));
   int<lower = 1> total_num_predictor_treatments = sum(array_product(outcome_analyzed_predictor_size, num_treatments));
   int<lower = 1> total_num_all_level_entity_predictor_treatments = sum(array_product(array_product(outcome_analyzed_predictor_size, num_treatments), num_outcome_analyzed_all_level_entities));
   
@@ -590,7 +590,7 @@ transformed data {
       
       for (subgroup_outcome_index_index in 1:num_model_level_subgroup_outcomes[model_level_index]) {
         int subgroup_outcome_index = model_level_subgroup_outcomes[model_level_subgroup_outcomes_pos + subgroup_outcome_index_index - 1];
-        int curr_subgroup_outcome_type = outcome_model_type[subgroup_outcome_index_index];
+        int curr_subgroup_outcome_type = outcome_model_type[subgroup_outcome_index];
         
         if (curr_subgroup_outcome_type == MODEL_TYPE_LOGIT) {
           num_model_level_subgroup_outcomes_col[model_level_index] += 2;
@@ -611,6 +611,7 @@ transformed data {
       model_level_subgroup_outcomes_pos = model_level_subgroup_outcomes_end + 1;
     }
   }
+  
   
   // Outcomes loop for per entity candidates total count
   {
@@ -1502,7 +1503,7 @@ generated quantities {
 
   matrix[num_excluded_ids > 0 ? 0 : total_num_subgroup_ate_pairs, num_iter_summary_quantiles] iter_te_quantiles;
   
-  vector[num_excluded_ids > 0 ? 0 : total_num_all_level_entity_predictor_treatments + total_num_predictor_treatments] iter_model_level_predictor_with_containers;
+  // vector[num_excluded_ids > 0 ? 0 : total_num_all_level_entity_predictor_treatments + total_num_predictor_treatments] iter_model_level_predictor_with_containers;
   
   // vector<lower = 0, upper = 1>[total_num_subgroup_treatment_ordered_levels] iter_level_ecdf;
   // vector<lower = -1, upper = 1>[total_num_subgroup_ate_pair_ordered_levels] iter_te_ecdf_diff;
@@ -1996,7 +1997,7 @@ generated quantities {
          }
             
           // (Super)population estimates /////////////////////////////////////////////////////////////////////////////////////////
-          if (num_excluded_ids == 0) {
+          /*if (num_excluded_ids == 0) {
             int num_model_level_entities = sum(model_level_size[outcome_analyzed_levels[outcome_model_levels_pos:outcome_model_levels_end]]);
             int save_model_level_predictor_coef_pos = model_level_predictor_coef_pos;
             int curr_pop_entities_pos = 1;
@@ -2013,9 +2014,10 @@ generated quantities {
             curr_level_sizes[curr_outcome_model_levels] = model_level_size[curr_outcome_model_levels]; 
             
             if (outcome_model_type[curr_outcome_index] == MODEL_TYPE_ORDERED_LOGIT) {
-              curr_predictors = rep_matrix(rep_each_row_vector(hyper_predictor[outcome_treatment_pos:outcome_treatment_end]', curr_predictor_size) -
-                                             rep_times_row_vector(cutpoints[cutpoint_pos:cutpoint_end]', curr_num_treatments), 
-                                           num_model_level_entities + 1); 
+              curr_predictors = rep_matrix(
+                rep_each_row_vector(hyper_predictor[outcome_treatment_pos:outcome_treatment_end]', curr_predictor_size) - rep_times_row_vector(cutpoints[cutpoint_pos:cutpoint_end]', curr_num_treatments), 
+                num_model_level_entities + 1
+              ); 
             } else {
               curr_predictors = rep_matrix(hyper_predictor[outcome_treatment_pos:outcome_treatment_end]', num_model_level_entities + 1); 
             }
@@ -2102,7 +2104,7 @@ generated quantities {
               to_vector(curr_predictors'); 
               
             model_level_predictor_with_containers_pos = model_level_predictor_with_containers_end + 1;
-          }
+          }*/
            
           // Residuals and sample variance of residuals for calculation of pooling /////////////////////////////////////////////////////////
           if (num_excluded_ids == 0) {
