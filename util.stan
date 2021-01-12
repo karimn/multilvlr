@@ -147,7 +147,7 @@ int[] count_by_group_test(int[] to_count, int[] group, int[] target_val, int tes
   int group_pos = 1;
   
   if (num_elements(group) != num_to_count) {
-    reject("Incompatible array sizes.")
+    reject("Incompatible array sizes.");
   }
   
   for (group_index in 1:num_groups) {
@@ -358,7 +358,7 @@ vector pmin_max(vector left, vector right, int use_min) {
   vector[vec_size] min_max_vec;
   
   if (num_elements(right) != vec_size) {
-    reject("Incompatible vector sizes.")
+    reject("Incompatible vector sizes.");
   }
   
   for (min_max_index in 1:vec_size) {
@@ -647,7 +647,7 @@ int[] rep_each(int[] to_repeat, int[] each) {
   int rep_pos = 1;
   
   if (num_elements(each) != num_to_repeat) {
-    reject("Incompatible array sizes.")
+    reject("Incompatible array sizes.");
   }
   
   for (rep_index in 1:num_to_repeat) {
